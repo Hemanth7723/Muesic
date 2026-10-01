@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-
   workflow_dispatch:
 
 permissions:
@@ -39,7 +38,14 @@ jobs:
       # GRADLE PERMISSION
       # ---------------------------------------------------------
       - name: Grant Execute Permission for Gradlew
-        run: chmod +x ./gradlew
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            echo "Gradle wrapper found."
+          else
+            echo "Gradle wrapper not found."
+            echo "Will use system Gradle instead."
+          fi
 
       # ---------------------------------------------------------
       # DECODE RELEASE KEYSTORE
@@ -98,7 +104,7 @@ jobs:
           echo "Release keystore and alias verified successfully."
 
       # ---------------------------------------------------------
-      # EXTRACT GIT INFORMATION
+      # EXTRACT GIT METADATA
       # ---------------------------------------------------------
       - name: Extract Git Metadata
         run: |
@@ -119,7 +125,7 @@ jobs:
           echo "======================================"
 
       # ---------------------------------------------------------
-      # BUILD SIGNED RELEASE APK
+      # BUILD RELEASE APK
       # ---------------------------------------------------------
       - name: Build Release APK
         env:
@@ -144,7 +150,12 @@ jobs:
 
           echo "Building signed release APK..."
 
-          ./gradlew clean assembleRelease --stacktrace
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew clean assembleRelease --stacktrace
+          else
+            gradle clean assembleRelease --stacktrace
+          fi
 
       # ---------------------------------------------------------
       # VERIFY APK EXISTS
