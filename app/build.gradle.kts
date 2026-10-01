@@ -1,4 +1,3 @@
-```kotlin
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -77,50 +76,43 @@ android {
             "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // ---------------------------------------------------------
-    // Signing
-    // ---------------------------------------------------------
+    /*
+     * RELEASE SIGNING
+     *
+     * Release builds MUST use the GitHub Actions release keystore.
+     * There is intentionally NO debug.keystore fallback here.
+     */
     signingConfigs {
-
         create("release") {
             val keystorePath = System.getenv("KEYSTORE_PATH")
-
-            if (keystorePath.isNullOrBlank()) {
-                throw GradleException(
+                ?: throw GradleException(
                     "KEYSTORE_PATH is not set. " +
-                    "Release builds require a release keystore."
+                        "Release builds require a release keystore."
                 )
-            }
 
             val keystoreFile = file(keystorePath)
 
             if (!keystoreFile.exists()) {
                 throw GradleException(
-                    "Release keystore not found: ${keystoreFile.absolutePath}"
+                    "Release keystore not found: " +
+                        keystoreFile.absolutePath
                 )
             }
 
             val storePassword = System.getenv("STORE_PASSWORD")
-            val keyAlias = "Muesic"
-            val keyPassword = System.getenv("KEY_PASSWORD")
-
-            if (storePassword.isNullOrBlank()) {
-                throw GradleException(
+                ?: throw GradleException(
                     "STORE_PASSWORD is not set."
                 )
-            }
 
-            if (keyAlias.isNullOrBlank()) {
-                throw GradleException(
+            val keyAlias = System.getenv("KEY_ALIAS")
+                ?: throw GradleException(
                     "KEY_ALIAS is not set."
                 )
-            }
 
-            if (keyPassword.isNullOrBlank()) {
-                throw GradleException(
+            val keyPassword = System.getenv("KEY_PASSWORD")
+                ?: throw GradleException(
                     "KEY_PASSWORD is not set."
                 )
-            }
 
             storeFile = keystoreFile
             this.storePassword = storePassword
@@ -128,6 +120,11 @@ android {
             this.keyPassword = keyPassword
         }
 
+        /*
+         * DEBUG SIGNING
+         *
+         * Only used for local debug builds.
+         */
         create("debugConfig") {
             storeFile = file("${rootDir}/debug.keystore")
             storePassword = "android"
@@ -137,7 +134,6 @@ android {
     }
 
     buildTypes {
-
         release {
             isCrunchPngs = false
             isMinifyEnabled = false
@@ -179,34 +175,40 @@ android {
     }
 }
 
-// ---------------------------------------------------------
-// Secrets Gradle Plugin
-// ---------------------------------------------------------
+/*
+ * Secrets Gradle Plugin
+ *
+ * Firebase is NOT used by Muesic.
+ * This configuration is harmless and allows .env / .env.example
+ * to continue working if the project uses them.
+ */
 secrets {
     propertiesFileName = ".env"
     defaultPropertiesFileName = ".env.example"
     ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
 }
 
-// ---------------------------------------------------------
-// Dependencies
-// ---------------------------------------------------------
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
 
     implementation(libs.androidx.activity.compose)
+
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
+
     implementation(libs.androidx.core.ktx)
+
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.room.runtime)
+
     implementation(libs.coil.compose)
 
     implementation(libs.kotlinx.coroutines.android)
@@ -222,15 +224,28 @@ dependencies {
     testImplementation(libs.roborazzi.compose)
     testImplementation(libs.roborazzi.junit.rule)
 
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.runner)
+    androidTestImplementation(
+        platform(libs.androidx.compose.bom)
+    )
+    androidTestImplementation(
+        libs.androidx.compose.ui.test.junit4
+    )
+    androidTestImplementation(
+        libs.androidx.espresso.core
+    )
+    androidTestImplementation(
+        libs.androidx.junit
+    )
+    androidTestImplementation(
+        libs.androidx.runner
+    )
 
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
-    debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(
+        libs.androidx.compose.ui.test.manifest
+    )
+    debugImplementation(
+        libs.androidx.compose.ui.tooling
+    )
 
     ksp(libs.androidx.room.compiler)
 }
-```
