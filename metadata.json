@@ -1,0 +1,6 @@
+{
+  "name": "Muesic",
+  "description": "Private music player streaming millions of songs directly from JioSaavn (320kbps) and YouTube Music with zero API keys or authentication, offline caching, and integrated equalizer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
