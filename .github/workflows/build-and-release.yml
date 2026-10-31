@@ -56,20 +56,14 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: gradle
 
       # ---------------------------------------------------------
-      # GRADLE PERMISSION
+      # GRADLE
       # ---------------------------------------------------------
-      - name: Grant Execute Permission for Gradlew
-        run: |
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            echo "Gradle wrapper found."
-          else
-            echo "Gradle wrapper not found."
-            echo "Will use system Gradle instead."
-          fi
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
 
       # ---------------------------------------------------------
       # DECODE RELEASE KEYSTORE
@@ -174,13 +168,7 @@ jobs:
           fi
 
           echo "Building signed release APK..."
-
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            ./gradlew clean assembleRelease --stacktrace
-          else
-            gradle clean assembleRelease --stacktrace
-          fi
+          gradle clean assembleRelease --stacktrace
 
       # ---------------------------------------------------------
       # VERIFY APK EXISTS
@@ -189,18 +177,19 @@ jobs:
         run: |
           echo "Generated APK files:"
 
-          find app/build/outputs/apk/release \
+          OUTPUT_DIR="app/build/outputs/apk/release"
+          find "$OUTPUT_DIR" \
             -type f \
             -name "*.apk" \
             -print
 
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64 universal; do
-            APK="app/build/outputs/apk/release/app-${ABI}-release.apk"
-            if [ ! -s "$APK" ]; then
-              echo "ERROR: Expected APK was not generated: $APK"
-              exit 1
-            fi
-          done
+          APK_COUNT=$(find "$OUTPUT_DIR" -type f -name "*.apk" | wc -l)
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: No release APK was generated."
+            exit 1
+          fi
+
+          echo "Found $APK_COUNT APK file(s)."
 
       # ---------------------------------------------------------
       # RENAME UNIVERSAL AND ABI-SPECIFIC APKs
@@ -210,12 +199,44 @@ jobs:
           GIT_TAG: ${{ steps.metadata.outputs.tag }}
         run: |
           OUTPUT_DIR="app/build/outputs/apk/release"
-          mv "$OUTPUT_DIR/app-universal-release.apk" \
-            "$OUTPUT_DIR/Muesic_${GIT_TAG}.apk"
+          FOUND_APK=false
 
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
-            mv "$OUTPUT_DIR/app-${ABI}-release.apk" \
-              "$OUTPUT_DIR/Muesic_${GIT_TAG}_${ABI}.apk"
+          while IFS= read -r -d '' APK; do
+            FILE_NAME=$(basename "$APK")
+            case "$FILE_NAME" in
+              app-universal-release.apk)
+                OUTPUT="$OUTPUT_DIR/Muesic_${GIT_TAG}.apk"
+                ;;
+              app-*-release.apk)
+                ABI="${FILE_NAME#app-}"
+                ABI="${ABI%-release.apk}"
+                OUTPUT="$OUTPUT_DIR/Muesic_${GIT_TAG}_${ABI}.apk"
+                ;;
+              *)
+                echo "ERROR: Unexpected release APK name: $FILE_NAME"
+                exit 1
+                ;;
+            esac
+
+            mv "$APK" "$OUTPUT"
+            FOUND_APK=true
+          done < <(find "$OUTPUT_DIR" -maxdepth 1 -type f -name "*.apk" -print0)
+
+          if [ "$FOUND_APK" != true ]; then
+            echo "ERROR: No APKs were available to rename."
+            exit 1
+          fi
+
+          for APK in \
+            "$OUTPUT_DIR/Muesic_${GIT_TAG}.apk" \
+            "$OUTPUT_DIR/Muesic_${GIT_TAG}_arm64-v8a.apk" \
+            "$OUTPUT_DIR/Muesic_${GIT_TAG}_armeabi-v7a.apk" \
+            "$OUTPUT_DIR/Muesic_${GIT_TAG}_x86.apk" \
+            "$OUTPUT_DIR/Muesic_${GIT_TAG}_x86_64.apk"; do
+            if [ ! -s "$APK" ]; then
+              echo "ERROR: Expected release APK was not generated: $APK"
+              exit 1
+            fi
           done
 
           ls -lh "$OUTPUT_DIR"/Muesic_"${GIT_TAG}"*.apk
@@ -238,7 +259,14 @@ jobs:
             exit 1
           fi
 
-          for APK in app/build/outputs/apk/release/Muesic_"${GIT_TAG}"*.apk; do
+          shopt -s nullglob
+          APKS=(app/build/outputs/apk/release/Muesic_"${GIT_TAG}"*.apk)
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "ERROR: No renamed release APKs were found."
+            exit 1
+          fi
+
+          for APK in "${APKS[@]}"; do
             "$APKSIGNER" verify --verbose "$APK"
           done
 
