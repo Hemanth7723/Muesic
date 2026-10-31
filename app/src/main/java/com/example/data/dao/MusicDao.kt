@@ -168,16 +168,16 @@ interface SearchHistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSearch(search: SearchHistory)
 
-    @Query("SELECT query FROM search_history ORDER BY timestamp DESC LIMIT 30")
+    @Query("SELECT `query` FROM search_history ORDER BY timestamp DESC LIMIT 30")
     fun getSearchHistory(): Flow<List<String>>
 
     @Query("SELECT * FROM search_history ORDER BY timestamp DESC")
     suspend fun getAllSearchHistory(): List<SearchHistory>
 
-    @Query("DELETE FROM search_history WHERE query = :query")
+    @Query("DELETE FROM search_history WHERE `query` = :query")
     suspend fun deleteSearch(query: String)
 
-    @Query("DELETE FROM search_history WHERE query != :query AND :query LIKE query || '%'")
+    @Query("DELETE FROM search_history WHERE `query` != :query AND :query LIKE `query` || '%'")
     suspend fun deletePrefixesOf(query: String)
 
     @Query("DELETE FROM search_history")
