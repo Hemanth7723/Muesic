@@ -37,17 +37,12 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -107,6 +102,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        viewModel.playerController.youTubeWebPlayer.release()
+    }
 }
 
 @Composable
@@ -148,21 +147,6 @@ fun MuesicApp(viewModel: MusicViewModel) {
     val autoPlaySuggestion by viewModel.autoPlaySuggestion.collectAsStateWithLifecycle()
     val autoPlayMode by viewModel.autoPlayMode.collectAsStateWithLifecycle()
     val isBuffering by viewModel.isBuffering.collectAsStateWithLifecycle()
-    val playbackError by viewModel.playbackError.collectAsStateWithLifecycle()
-    val operationMessage by viewModel.operationMessage.collectAsStateWithLifecycle()
-    val pendingYtDlpAction by viewModel.pendingYtDlpAction.collectAsStateWithLifecycle()
-    val isDownloadingYtDlp by viewModel.isDownloadingYtDlp.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    androidx.compose.runtime.LaunchedEffect(playbackError) {
-        playbackError?.let { snackbarHostState.showSnackbar(it) }
-    }
-    androidx.compose.runtime.LaunchedEffect(operationMessage) {
-        operationMessage?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearOperationMessage()
-        }
-    }
 
     // Search & Stream States
     val onlineSearchResults by viewModel.onlineSearchResults.collectAsStateWithLifecycle()
@@ -196,7 +180,6 @@ fun MuesicApp(viewModel: MusicViewModel) {
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         containerColor = appTheme.background,
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         bottomBar = {
             Box(
                 modifier = Modifier
@@ -416,7 +399,6 @@ fun MuesicApp(viewModel: MusicViewModel) {
                             onlineSearchResults = onlineSearchResults,
                             isSearching = isSearching,
                             searchError = searchError,
-                            isDownloadingYtDlp = isDownloadingYtDlp,
                             activeSource = activeSearchSource,
                             searchHistory = searchHistory,
                             currentSong = currentSong,
@@ -465,48 +447,6 @@ fun MuesicApp(viewModel: MusicViewModel) {
                 }
             }
         }
-    }
-
-    pendingYtDlpAction?.let { pending ->
-        AlertDialog(
-            onDismissRequest = {
-                if (!isDownloadingYtDlp) viewModel.dismissPendingYtDlpAction()
-            },
-            title = { Text("Confirm authorized download") },
-            text = {
-                Text(
-                    "Muesic will use yt-dlp to download and extract audio from “${pending.song.title}”. " +
-                        "Continue only if you own this content or have permission to download it, " +
-                        "and the source allows downloading. The audio will be saved to the yt-dlp folder selected in Settings."
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { viewModel.confirmPendingYtDlpAction() },
-                    enabled = !isDownloadingYtDlp
-                ) {
-                    if (isDownloadingYtDlp) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(
-                            if (pending.action == MusicViewModel.YtDlpAction.PLAY) {
-                                "Download & play"
-                            } else {
-                                "Download audio"
-                            }
-                        )
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { viewModel.dismissPendingYtDlpAction() },
-                    enabled = !isDownloadingYtDlp
-                ) {
-                    Text("Cancel")
-                }
-            }
-        )
     }
 
     // Modal Bottom Sheet: Full Player with Next Song & Lyrics

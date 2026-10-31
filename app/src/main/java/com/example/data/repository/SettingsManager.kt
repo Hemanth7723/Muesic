@@ -22,7 +22,6 @@ class SettingsManager(private val context: Context) {
     companion object {
         private const val KEY_BACKUP_FOLDER_PATH = "key_backup_folder_path"
         private const val KEY_BACKUP_FOLDER_URI = "key_backup_folder_uri"
-        private const val KEY_YTDLP_DOWNLOAD_FOLDER_URI = "key_ytdlp_download_folder_uri"
         private const val KEY_DEVELOPER_NAME = "key_developer_name"
         private const val KEY_APP_NAME = "key_app_name"
         private const val KEY_APP_VERSION = "key_app_version"
@@ -86,13 +85,6 @@ class SettingsManager(private val context: Context) {
 
     fun setBackupFolderUri(uriString: String?) {
         prefs.edit().putString(KEY_BACKUP_FOLDER_URI, uriString).apply()
-    }
-
-    fun getYtDlpDownloadFolderUri(): String? =
-        prefs.getString(KEY_YTDLP_DOWNLOAD_FOLDER_URI, null)
-
-    fun setYtDlpDownloadFolderUri(uriString: String?) {
-        prefs.edit().putString(KEY_YTDLP_DOWNLOAD_FOLDER_URI, uriString).apply()
     }
 
     fun getGitVersion(): String = BuildConfig.GIT_TAG_OR_VERSION.ifBlank { DEFAULT_APP_VERSION }

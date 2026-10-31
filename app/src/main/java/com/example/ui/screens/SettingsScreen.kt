@@ -3,8 +3,6 @@ package com.example.ui.screens
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -99,28 +97,6 @@ fun SettingsScreen(
 
     var currentBackupFolderPath by remember { mutableStateOf(settingsManager.getBackupFolderPath()) }
     var showFolderEditDialog by remember { mutableStateOf(false) }
-    var ytDlpFolderUri by remember {
-        mutableStateOf(settingsManager.getYtDlpDownloadFolderUri()?.let { Uri.parse(it) })
-    }
-    val ytDlpFolderPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-                settingsManager.setYtDlpDownloadFolderUri(uri.toString())
-                ytDlpFolderUri = uri
-                isMessageSuccess = true
-                actionMessage = "yt-dlp download folder updated."
-            } catch (e: Exception) {
-                isMessageSuccess = false
-                actionMessage = "Could not keep access to that folder: ${e.localizedMessage}"
-            }
-        }
-    }
 
     var aboutInfo by remember { mutableStateOf(settingsManager.getAboutInfo()) }
     var showAboutEditDialog by remember { mutableStateOf(false) }
@@ -333,69 +309,7 @@ fun SettingsScreen(
             }
         }
 
-        // Section 2: yt-dlp Downloads
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    text = "YT-DLP DOWNLOADS",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = appTheme.accentSecondary,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                GlassCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(16.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "Download destination",
-                            color = appTheme.textPrimary,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = ytDlpFolderUri?.lastPathSegment?.substringAfterLast(':')
-                                ?.takeIf { it.isNotBlank() }
-                                ?: "No folder selected",
-                            color = appTheme.textSecondary,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "Choose a system folder for authorized yt-dlp audio downloads. Muesic will ask for confirmation before downloading.",
-                            color = appTheme.textMuted,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        OutlinedButton(
-                            onClick = { ytDlpFolderPicker.launch(ytDlpFolderUri) },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(
-                                Icons.Default.Folder,
-                                contentDescription = null,
-                                tint = appTheme.accent,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                if (ytDlpFolderUri == null) "Choose Download Folder" else "Change Download Folder",
-                                color = appTheme.textPrimary,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Section 3: Memory & Playback Cache
+        // Section 2: Memory & Playback Cache
         item {
             Column(
                 modifier = Modifier
@@ -476,7 +390,7 @@ fun SettingsScreen(
             }
         }
 
-        // Section 4: About & Developer
+        // Section 3: About & Developer
         item {
             Column(
                 modifier = Modifier
@@ -593,7 +507,7 @@ fun SettingsScreen(
                                     .padding(4.dp)
                             ) {
                                 Text(
-                                    text = "GPL-3.0 & Third-party licenses",
+                                    text = "MIT License",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = appTheme.accent,
                                     textDecoration = TextDecoration.Underline,
@@ -608,7 +522,7 @@ fun SettingsScreen(
             }
         }
 
-        // Section 5: Theme & Appearance
+        // Section 4: Theme & Appearance
         item {
             Column(
                 modifier = Modifier
@@ -979,13 +893,13 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Open-source licenses",
+                        text = "MIT License",
                         style = MaterialTheme.typography.titleMedium,
                         color = appTheme.textPrimary,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Muesic Contributors and third-party components",
+                        text = "Copyright (c) 2026 Muesic Contributors",
                         style = MaterialTheme.typography.labelMedium,
                         color = appTheme.accent,
                         fontWeight = FontWeight.SemiBold
@@ -1003,15 +917,7 @@ fun SettingsScreen(
                                 .padding(12.dp)
                         ) {
                             Text(
-                                text = remember {
-                                    val gplText = context.assets.open("licenses/GPL-3.0.txt")
-                                        .bufferedReader().use { it.readText() }
-                                    val mitText = context.assets.open("licenses/MIT.txt")
-                                        .bufferedReader().use { it.readText() }
-                                    val notices = context.assets.open("licenses/THIRD_PARTY_NOTICES.txt")
-                                        .bufferedReader().use { it.readText() }
-                                    "$gplText\n\n$mitText\n\n$notices"
-                                },
+                                text = "Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appTheme.textSecondary,
                                 lineHeight = 18.sp

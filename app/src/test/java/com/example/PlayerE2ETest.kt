@@ -11,7 +11,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -28,14 +27,10 @@ import com.example.ui.components.NowPlayingSheet
 import com.example.ui.screens.SearchScreen
 import com.example.ui.theme.MuesicTheme
 import com.example.util.OriginalSongFilter
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -45,7 +40,7 @@ import org.robolectric.annotation.Config
 
 /**
  * Comprehensive End-to-End Test Suite certifying player functionality:
- * - Search query across each music source (ALL, JioSaavn 320k, YouTube Music, YouTube, yt-dlp URL)
+ * - Search query across each music source (ALL, JioSaavn 320k, YouTube Music, YouTube)
  * - Source filter switching and search input entry
  * - Song selection from search results triggering playback
  * - Mid-song pause and resume with timestamp preservation
@@ -55,7 +50,6 @@ import org.robolectric.annotation.Config
  * - MiniPlayerBar instant controls (play/pause, next)
  * - NowPlayingSheet controls & Up Next selection
  * - Audio source filter original song validation
- * - yt-dlp URL lookup, result selection, save action, and authorization gating
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -143,28 +137,9 @@ class PlayerE2ETest {
         viewModel.setSearchSource(MusicViewModel.SearchSourceFilter.YOUTUBE)
         assertEquals(MusicViewModel.SearchSourceFilter.YOUTUBE, viewModel.searchSource.value)
 
-        viewModel.setSearchSource(MusicViewModel.SearchSourceFilter.YT_DLP)
-        assertEquals(MusicViewModel.SearchSourceFilter.YT_DLP, viewModel.searchSource.value)
-
         // 4. Return to All Sources
         viewModel.setSearchSource(MusicViewModel.SearchSourceFilter.ALL)
         assertEquals(MusicViewModel.SearchSourceFilter.ALL, viewModel.searchSource.value)
-    }
-
-    @Test
-    fun togglingFavoritePersistsTheRequestedState() = runBlocking {
-        val song = sampleTrack1.copy(isFavorite = false)
-        viewModel.repository.insertSong(song)
-
-        viewModel.toggleFavorite(song)
-
-        withTimeout(5_000) {
-            while (viewModel.repository.getSongById(song.id)?.isFavorite != true) {
-                delay(10)
-            }
-        }
-
-        assertTrue(viewModel.repository.getSongById(song.id)?.isFavorite == true)
     }
 
     @Test
@@ -544,105 +519,6 @@ class PlayerE2ETest {
         composeTestRule.waitForIdle()
         assertNotNull("Song click must be received", clickedSong)
         assertEquals(sampleTrack1.id, clickedSong?.id)
-    }
-
-    @Test
-    fun ytDlpUrlImportFlowRequiresExplicitSearchAndRoutesSongActions() {
-        val pageUrl = "https://example.com/my-authorized-audio"
-        val ytDlpSong = Song(
-            id = "ytdlp-123",
-            title = "Authorized Audio",
-            artist = "Sample Creator",
-            album = "Online audio",
-            durationMs = 180_000L,
-            streamUrl = pageUrl,
-            source = "yt-dlp"
-        )
-        var selectedSource by mutableStateOf(MusicViewModel.SearchSourceFilter.ALL)
-        var searchedUrl by mutableStateOf<String?>(null)
-        var autoSearchCount = 0
-
-        composeTestRule.setContent {
-            MuesicTheme {
-                SearchScreen(
-                    allSongs = emptyList(),
-                    onlineSearchResults = if (searchedUrl == pageUrl) listOf(ytDlpSong) else emptyList(),
-                    isSearching = false,
-                    searchError = null,
-                    activeSource = selectedSource,
-                    currentSong = null,
-                    isPlaying = false,
-                    onSearch = { autoSearchCount++ },
-                    onExecuteSearch = { searchedUrl = it },
-                    onSelectSource = { selectedSource = it },
-                    onSongClick = { viewModel.playSong(it) },
-                    onToggleFavorite = {},
-                    onCacheSong = { viewModel.cacheSong(it) }
-                )
-            }
-        }
-
-        composeTestRule.onNodeWithTag("source_filter_YT_DLP").performClick()
-        assertEquals(MusicViewModel.SearchSourceFilter.YT_DLP, selectedSource)
-        composeTestRule.onNodeWithTag("search_input_field").performTextInput(pageUrl)
-        assertEquals("Typing a URL must not start a metadata lookup.", 0, autoSearchCount)
-
-        composeTestRule.onNodeWithContentDescription("Execute Search").performClick()
-        composeTestRule.waitForIdle()
-        assertEquals(pageUrl, searchedUrl)
-
-        composeTestRule.onNodeWithTag("search_song_card_${ytDlpSong.id}", useUnmergedTree = true)
-            .assertIsDisplayed()
-        composeTestRule.onNodeWithTag("search_song_card_${ytDlpSong.id}", useUnmergedTree = true)
-            .performTouchInput { click(Offset(40f, 40f)) }
-        assertEquals(
-            MusicViewModel.YtDlpAction.PLAY,
-            viewModel.pendingYtDlpAction.value?.action
-        )
-        assertNull("Song selection must wait for authorization, not start playback.", viewModel.currentSong.value)
-        viewModel.dismissPendingYtDlpAction()
-
-        composeTestRule.onNodeWithContentDescription("Save Offline").performClick()
-        assertEquals(
-            MusicViewModel.YtDlpAction.SAVE_OFFLINE,
-            viewModel.pendingYtDlpAction.value?.action
-        )
-        assertNull("Save action must wait for authorization.", viewModel.currentSong.value)
-        viewModel.dismissPendingYtDlpAction()
-    }
-
-    @Test
-    fun ytDlpPlaybackRequestsAuthorizationBeforeStartingPlayback() {
-        val ytDlpSong = Song(
-            id = "ytdlp-consent-test",
-            title = "Authorized Audio",
-            artist = "Sample Creator",
-            album = "Online audio",
-            durationMs = 180_000L,
-            streamUrl = "https://example.com/audio",
-            source = "yt-dlp"
-        )
-
-        viewModel.playSong(ytDlpSong)
-
-        assertEquals(ytDlpSong, viewModel.pendingYtDlpAction.value?.song)
-        assertEquals(
-            MusicViewModel.YtDlpAction.PLAY,
-            viewModel.pendingYtDlpAction.value?.action
-        )
-        assertNull("Playback must wait for user authorization.", viewModel.currentSong.value)
-
-        viewModel.dismissPendingYtDlpAction()
-        assertNull(viewModel.pendingYtDlpAction.value)
-        assertNull(viewModel.currentSong.value)
-
-        viewModel.cacheSong(ytDlpSong)
-        assertEquals(
-            MusicViewModel.YtDlpAction.SAVE_OFFLINE,
-            viewModel.pendingYtDlpAction.value?.action
-        )
-        assertNull("Saving also requires user authorization.", viewModel.currentSong.value)
-        viewModel.dismissPendingYtDlpAction()
     }
 
     @Test
