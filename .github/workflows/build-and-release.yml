@@ -101,25 +101,31 @@ jobs:
       - name: Verify Release Keystore
         env:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_ALIAS: upload
         run: |
           if [ -z "$STORE_PASSWORD" ]; then
             echo "ERROR: STORE_PASSWORD GitHub secret is missing."
             exit 1
           fi
 
-          if [ -z "$KEY_ALIAS" ]; then
-            echo "ERROR: KEY_ALIAS GitHub secret is missing."
+          echo "Verifying release keystore..."
+
+          if ! KEYSTORE_OUTPUT=$(keytool -list \
+            -keystore app/my-upload-key.jks \
+            -storepass "$STORE_PASSWORD" 2>&1); then
+            echo "::error::Could not open the decoded keystore. Check that KEYSTORE_BASE64 and STORE_PASSWORD are from the same keystore."
+            printf '%s\n' "$KEYSTORE_OUTPUT"
             exit 1
           fi
 
-          echo "Verifying release keystore..."
-
-          keytool -list \
+          if ! ALIAS_OUTPUT=$(keytool -list \
             -keystore app/my-upload-key.jks \
             -storepass "$STORE_PASSWORD" \
-            -alias "$KEY_ALIAS" \
-            > /dev/null
+            -alias "$KEY_ALIAS" 2>&1); then
+            echo "::error::The keystore opened, but KEY_ALIAS was not found. Check that KEY_ALIAS matches the key entry in KEYSTORE_BASE64."
+            printf '%s\n' "$ALIAS_OUTPUT"
+            exit 1
+          fi
 
           echo "Release keystore and alias verified successfully."
 
@@ -152,7 +158,7 @@ jobs:
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/app/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_ALIAS: upload
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
           GIT_TAG: ${{ steps.metadata.outputs.tag }}
