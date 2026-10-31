@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/UI-Jetpack_Compose_&_M3-purple.svg" alt="Jetpack Compose" />
   <img src="https://img.shields.io/badge/Audio-320kbps_Hi--Fi-teal.svg" alt="Audio Quality" />
   <img src="https://img.shields.io/badge/Privacy-Zero_Tracking-success.svg" alt="Privacy" />
-  <img src="https://img.shields.io/badge/License-MIT-orange.svg" alt="License" />
+  <img src="https://img.shields.io/badge/License-GPL--3.0-orange.svg" alt="License" />
 </p>
 
 ---
@@ -28,10 +28,11 @@
 
 ## ✨ Currently Existing Features
 
-### 🎧 1. Dual Online Streaming Engines
+### 🎧 1. Multi-Source Search & Playback
 - 🎵 **Direct JioSaavn Streaming**: Instant search and direct streaming of millions of Bollywood, regional (Punjabi, Tamil, Telugu, Malayalam, Bengali), and international tracks at up to **320 kbps** with zero authentication.
 - 📺 **Headless YouTube & YouTube Music Engine**: Seamlessly searches and plays tracks from YouTube & YouTube Music in the background with lock screen playback and no video interference.
 - 🔍 **Unified Multi-Source Search**: Switch between *All Sources*, *JioSaavn*, *YouTube Music*, and *YouTube* with a single tap, complete with instant search history and auto-suggestions.
+- ⬇️ **yt-dlp URL Import**: Select **yt-dlp URL**, paste a supported HTTPS media-page URL, and submit it explicitly to inspect the audio metadata. Choose **Download & play** or **Download audio** and confirm that you have permission and the source allows downloading. Muesic extracts an MP3 and saves it to the system folder selected under **Settings → yt-dlp Downloads**. This is URL-based importing, not a cross-site text-search catalog; support depends on yt-dlp's current extractors and the source's availability.
 
 ### 🌟 2. Dynamic Discover & Smart Feeds
 - 🔥 **Trending Hits**: Live trending charts continuously populated from online music rankings.
@@ -90,21 +91,80 @@
 ### Option 3: Command Line Build (Gradle)
 Ensure you have **JDK 17** installed and configured:
 ```bash
-# Build Debug APK
+# Build the debug APK
 gradle assembleDebug
 
-# Output APK location:
-# app/build/outputs/apk/debug/app-debug.apk
+# Outputs include a universal APK and smaller APKs for each supported CPU architecture:
+# app/build/outputs/apk/debug/app-universal-debug.apk
+# app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
 
-# Install directly to connected device via ADB
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Install the app on a connected Android device or running emulator
+gradle installDebug
+
+# Launch Muesic
+adb shell monkey -p com.aistudio.muesic.vzkxqy 1
 ```
+
+Run these commands from the repository root with an Android device/emulator connected and Android SDK platform-tools available on `PATH`. `gradle installDebug` builds and installs the debug variant in one step; the `adb` command opens the installed app.
+Release downloads include a universal APK and ABI-specific APKs (`arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`). Choose the matching ABI APK for a smaller download; use the universal APK when the device architecture is unknown.
+
+Debug builds and Android Studio sync do not require release-signing secrets. Release APK/AAB packaging requires `KEYSTORE_PATH`, `STORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD` to point to a valid release keystore and credentials.
+
+#### Build a signed release with Gradle (Windows PowerShell)
+
+From the repository root, set the release keystore and credentials in the current PowerShell session. `Read-Host` hides the password as you type; do not put signing passwords in committed files or command-line arguments.
+
+```powershell
+$env:KEYSTORE_PATH = "C:\path\to\release-key.jks"
+$env:STORE_PASSWORD = Read-Host "Keystore password"
+$env:KEY_ALIAS = Read-Host "Key alias"
+$env:KEY_PASSWORD = Read-Host "Key password"
+```
+
+Build the release APKs:
+
+```powershell
+.\gradlew.bat :app:assembleRelease
+```
+
+The universal and ABI-specific signed APKs are written to `app\build\outputs\apk\release\`. To build an Android App Bundle instead:
+
+```powershell
+.\gradlew.bat :app:bundleRelease
+```
+
+The signed bundle is written to `app\build\outputs\bundle\release\app-release.aab`. These commands build locally; pushing a `v*` tag triggers the GitHub Actions workflow to publish a GitHub Release. Close the PowerShell session when finished to discard its temporary environment variables.
 
 ### 🤖 Automated GitHub CI & Version Metadata
 Muesic is configured with automatic Git metadata reflection:
 - **Automatic Tag Versioning**: When pushing a release tag (e.g., `v1.1.0`), the build pipeline automatically captures the version, commit date, and repository URL.
 - **In-App About Reflection**: The in-app **About & Developer** section displays the clean version tag, latest commit date, and GitHub repository link.
 - **Tag-Only GitHub Actions Workflow**: `.github/workflows/build-and-release.yml` triggers **only** when a commit with a tag is pushed (e.g. `git push origin v1.1.0`). Untagged commits will not trigger a build, keeping CI usage clean and focused solely on official tagged releases.
+
+---
+
+## 🎼 yt-dlp URL Import: User Guide
+
+1. In **Settings → yt-dlp Downloads**, choose a destination folder through Android's system folder picker. Muesic remembers access to that folder for later downloads.
+2. Open **Search**, choose **yt-dlp URL**, paste an HTTPS page URL, then tap the search/submit button or use the keyboard's Search action. URL text is not submitted automatically while typing.
+3. Review the title and creator returned by yt-dlp. Tap the result to **Download & play**, or use its download icon to save it without starting playback.
+4. Confirm the authorization prompt. The MP3 is first extracted into temporary app storage, copied to the selected folder, and then played from that saved file when requested.
+
+Only download audio that you own or are authorized to download, and only when permitted by the source and applicable law. Enter a page URL—not a search phrase. URLs must use HTTPS and cannot include embedded username/password credentials. A supported URL is not guaranteed: websites may block extraction, require authentication, or change their page formats. Muesic does not bypass access controls.
+
+---
+
+## 🧪 Tests
+
+The local unit-test suite includes Robolectric/Compose end-to-end coverage. `PlayerE2ETest` exercises source selection, URL submission, rendering the yt-dlp result, and routing Play/Save actions through the view model; it verifies both actions require explicit authorization before playback or saving. Other player tests cover queue selection, controls, seeking, and source filtering.
+
+Run the targeted test from the repository root with Gradle installed and an Android SDK configured:
+
+```bash
+gradle :app:testDebugUnitTest --tests com.example.PlayerE2ETest
+```
+
+The yt-dlp UI test uses a fixture result and does not make a live request to a media website. A successful test run therefore verifies the app flow, not current extractor support or a real-world download.
 
 ---
 
@@ -132,7 +192,8 @@ Here is what is currently planned for upcoming releases:
 | **Design System** | Material Design 3 (M3) with Custom Emerald Hi-Fi Theme |
 | **Architecture** | Clean MVVM (Model-View-ViewModel) + Repository Pattern |
 | **Concurrency** | Kotlin Coroutines & Flow (`StateFlow`, `collectAsStateWithLifecycle`) |
-| **Audio Engine** | AndroidX Media3 / ExoPlayer & Android `MediaSessionService` |
+| **Audio Engine** | Android `MediaPlayer`, headless WebView playback, and media notification service |
+| **Authorized URL Audio Import** | yt-dlp Android wrapper + FFmpeg; Storage Access Framework folder picker |
 | **Database** | Room Database (SQLite) + TypeConverters |
 | **Image Loading** | Coil Compose with disk and memory caching |
 | **Networking** | OkHttp & Retrofit |
@@ -151,7 +212,7 @@ Here is what is currently planned for upcoming releases:
 │           │   │   ├── database/                 # Room database definitions & DAOs
 │           │   │   ├── entity/                   # Song, Playlist, History data entities
 │           │   │   ├── model/                    # Category, Movie, Artist & Mix domain models
-│           │   │   ├── network/                  # JioSaavn API & streaming URL parsers
+│           │   │   ├── network/                  # Source services, URL parsers & yt-dlp integration
 │           │   │   └── repository/               # Content repositories & seed providers
 │           │   ├── playback/
 │           │   │   ├── AudioPlayerController.kt  # Unified audio playback manager
@@ -163,25 +224,25 @@ Here is what is currently planned for upcoming releases:
 │           │       ├── screens/                  # Home, Search, Library, Settings screens
 │           │       └── theme/                    # Color schemes, typography, and styling
 │           └── res/                              # Vector icons, logos, drawables, strings
+│       └── test/java/com/example/
+│           ├── PlayerE2ETest.kt                  # Compose/Robolectric player and yt-dlp UI flows
+│           └── MusicDataTest.kt                  # Data, URL validation & utility tests
 ├── app_logo.png                                  # High-resolution application logo
 ├── metadata.json                                 # AI Studio platform configuration
 └── README.md                                     # Project documentation
 ```
 
+Playback uses stricter title-and-artist matching for direct-stream recovery. If a matching stream cannot be found, playback reports an error instead of silently substituting a loosely related track or advancing the queue. Search input is debounced, and stale responses are discarded so older results do not replace newer queries.
+
 ---
 
 ## 🤝 Contributing
-Contributions, bug reports, and feature suggestions are welcome!
-1. Fork the Project.
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`).
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`).
-4. Push to the Branch (`git push origin feature/AmazingFeature`).
-5. Open a Pull Request.
+Contributions, bug reports, and feature suggestions are welcome! Please read the [contribution guide](CONTRIBUTING.md) for branch naming, change and test expectations, commit messages, and pull request standards.
 
 ---
 
 ## 📜 License
-Distributed under the **MIT License**. See `LICENSE` for more information.
+The complete application is distributed under **GPL-3.0** because the yt-dlp Android integration is GPL-licensed. Muesic's pre-existing application source remains available under the **MIT License** in `LICENSE-MIT`. See `LICENSE` and `THIRD_PARTY_NOTICES.md` for details and third-party attributions.
 
 <p align="center">
   Crafted with care for pure, uninterrupted music enjoyment. 🎧

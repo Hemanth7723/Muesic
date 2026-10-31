@@ -64,9 +64,6 @@ interface SongDao {
     @Update
     suspend fun updateSong(song: Song)
 
-    @Query("UPDATE songs SET isFavorite = CASE WHEN isFavorite = 1 THEN 0 ELSE 1 END WHERE id = :id")
-    suspend fun toggleFavorite(id: String)
-
     @Query("UPDATE songs SET isCached = :isCached, localFilePath = :localPath WHERE id = :id")
     suspend fun updateCacheStatus(id: String, isCached: Boolean, localPath: String?)
 

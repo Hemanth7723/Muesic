@@ -169,43 +169,35 @@ jobs:
             -name "*.apk" \
             -print
 
-          APK_COUNT=$(find app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: No release APK was generated."
-            exit 1
-          fi
-
-          echo "Found $APK_COUNT APK file(s)."
+          for ABI in arm64-v8a armeabi-v7a x86 x86_64 universal; do
+            APK="app/build/outputs/apk/release/app-${ABI}-release.apk"
+            if [ ! -s "$APK" ]; then
+              echo "ERROR: Expected APK was not generated: $APK"
+              exit 1
+            fi
+          done
 
       # ---------------------------------------------------------
-      # RENAME APK
+      # RENAME UNIVERSAL AND ABI-SPECIFIC APKs
       # ---------------------------------------------------------
-      - name: Rename APK
+      - name: Rename APKs
         run: |
-          APK=$(find app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" | head -n 1)
+          OUTPUT_DIR="app/build/outputs/apk/release"
+          mv "$OUTPUT_DIR/app-universal-release.apk" \
+            "$OUTPUT_DIR/Muesic_${GITHUB_REF_NAME}.apk"
 
-          OUTPUT="app/build/outputs/apk/release/Muesic_${GITHUB_REF_NAME}.apk"
+          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
+            mv "$OUTPUT_DIR/app-${ABI}-release.apk" \
+              "$OUTPUT_DIR/Muesic_${GITHUB_REF_NAME}_${ABI}.apk"
+          done
 
-          mv "$APK" "$OUTPUT"
-
-          echo "======================================"
-          echo "Final APK"
-          echo "======================================"
-
-          ls -lh "$OUTPUT"
+          ls -lh "$OUTPUT_DIR"/Muesic_"${GITHUB_REF_NAME}"*.apk
 
       # ---------------------------------------------------------
       # VERIFY APK SIGNATURE
       # ---------------------------------------------------------
       - name: Verify APK Signature
         run: |
-          APK="app/build/outputs/apk/release/Muesic_${GITHUB_REF_NAME}.apk"
-
           echo "Verifying APK signature..."
 
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
@@ -217,11 +209,11 @@ jobs:
             exit 1
           fi
 
-          "$APKSIGNER" verify \
-            --verbose \
-            "$APK"
+          for APK in app/build/outputs/apk/release/Muesic_"${GITHUB_REF_NAME}"*.apk; do
+            "$APKSIGNER" verify --verbose "$APK"
+          done
 
-          echo "APK signature verified successfully."
+          echo "All APK signatures verified successfully."
 
       # ---------------------------------------------------------
       # CREATE GITHUB RELEASE
@@ -232,6 +224,10 @@ jobs:
         with:
           files: |
             app/build/outputs/apk/release/Muesic_${{ github.ref_name }}.apk
+            app/build/outputs/apk/release/Muesic_${{ github.ref_name }}_arm64-v8a.apk
+            app/build/outputs/apk/release/Muesic_${{ github.ref_name }}_armeabi-v7a.apk
+            app/build/outputs/apk/release/Muesic_${{ github.ref_name }}_x86.apk
+            app/build/outputs/apk/release/Muesic_${{ github.ref_name }}_x86_64.apk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
