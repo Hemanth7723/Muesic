@@ -1,20 +1,29 @@
 package com.example.data.network
 
 import android.content.Context
+import android.util.Log
 import com.example.data.entity.Song
+import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URI
 import java.security.MessageDigest
 
 object YtDlpService {
+    private const val TAG = "YtDlpService"
+    private val updateMutex = Mutex()
+    @Volatile
+    private var stableVersionChecked = false
+
     suspend fun getSong(context: Context, pageUrl: String): Song =
         withContext(Dispatchers.IO) {
             val validatedUrl = validatePageUrl(pageUrl)
-            YoutubeDL.init(context.applicationContext)
+            initialize(context.applicationContext)
             val info = YoutubeDL.getInfo(validatedUrl)
             val title = info.title?.takeIf(String::isNotBlank)
                 ?: info.fulltitle?.takeIf(String::isNotBlank)
@@ -45,7 +54,9 @@ object YtDlpService {
     suspend fun downloadAudio(context: Context, pageUrl: String, outputFile: File) =
         withContext(Dispatchers.IO) {
             val validatedUrl = validatePageUrl(pageUrl)
-            YoutubeDL.init(context.applicationContext)
+            val appContext = context.applicationContext
+            initialize(appContext)
+            FFmpeg.getInstance().init(appContext)
             outputFile.parentFile?.let { parent ->
                 if (!parent.exists() && !parent.mkdirs()) {
                     throw IllegalStateException("Could not create the temporary download directory.")
@@ -67,6 +78,20 @@ object YtDlpService {
                 throw IllegalStateException("yt-dlp completed without producing an audio file.")
             }
         }
+
+    private suspend fun initialize(context: Context) {
+        YoutubeDL.init(context)
+        updateMutex.withLock {
+            if (stableVersionChecked) return
+
+            try {
+                YoutubeDL.updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
+                stableVersionChecked = true
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not update yt-dlp; continuing with the bundled version.", e)
+            }
+        }
+    }
 
     fun validatePageUrl(value: String): String {
         val trimmed = value.trim()
