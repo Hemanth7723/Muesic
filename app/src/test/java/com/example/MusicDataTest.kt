@@ -2,6 +2,8 @@ package com.example
 
 import com.example.data.entity.SearchHistory
 import com.example.data.entity.Song
+import com.example.data.network.YtDlpService
+import com.example.util.SongTitleCleaner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -85,6 +87,65 @@ class MusicDataTest {
         )
         assertEquals("Coldplay", historyItem.query)
         assertTrue(historyItem.timestamp > 0)
+    }
+
+    @Test
+    fun streamFallbackRequiresMatchingTitleAndArtist() {
+        assertTrue(
+            SongTitleCleaner.isStrongTrackMatch(
+                candidateTitle = "Kesariya (Official Audio)",
+                candidateArtist = "Arijit Singh, Pritam",
+                expectedTitle = "Kesariya",
+                expectedArtist = "Pritam, Arijit Singh, Amitabh Bhattacharya"
+            )
+        )
+        assertTrue(
+            SongTitleCleaner.isStrongTrackMatch(
+                candidateTitle = "Kesariya",
+                candidateArtist = "YouTube Creator",
+                expectedTitle = "Kesariya",
+                expectedArtist = "YouTube Creator"
+            )
+        )
+        assertTrue(
+            !SongTitleCleaner.isStrongTrackMatch(
+                candidateTitle = "Kesari",
+                candidateArtist = "Arijit Singh",
+                expectedTitle = "Kesariya",
+                expectedArtist = "Arijit Singh"
+            )
+        )
+        assertTrue(
+            !SongTitleCleaner.isStrongTrackMatch(
+                candidateTitle = "Kesariya",
+                candidateArtist = "Another Artist",
+                expectedTitle = "Kesariya",
+                expectedArtist = "Arijit Singh"
+            )
+        )
+    }
+
+    @Test
+    fun ytDlpPageUrlMustUseHttpsAndCannotContainCredentials() {
+        assertEquals(
+            "https://example.com/audio?id=123",
+            YtDlpService.validatePageUrl(" https://example.com/audio?id=123 ")
+        )
+
+        assertInvalidYtDlpUrl("http://example.com/audio")
+        val credentialedUrl = "https://" + listOf("user", "secret").joinToString(":") +
+            "@example.com/audio"
+        assertInvalidYtDlpUrl(credentialedUrl)
+        assertInvalidYtDlpUrl("not a URL")
+    }
+
+    private fun assertInvalidYtDlpUrl(url: String) {
+        try {
+            YtDlpService.validatePageUrl(url)
+            throw AssertionError("Expected invalid yt-dlp URL: $url")
+        } catch (_: IllegalArgumentException) {
+            // Expected validation failure.
+        }
     }
 
     @Test

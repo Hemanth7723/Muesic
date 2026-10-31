@@ -22,7 +22,9 @@ import com.example.playback.EqualizerState
 import com.example.playback.MuesicPlaybackService
 import com.example.playback.RepeatMode
 import com.example.ui.theme.ThemeMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -48,8 +50,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         ALL("All Sources"),
         JIOSAAVN("JioSaavn"),
         YOUTUBE_MUSIC("YouTube Music"),
-        YOUTUBE("YouTube")
+        YOUTUBE("YouTube"),
+        YT_DLP("yt-dlp URL")
     }
+
+    enum class YtDlpAction {
+        PLAY,
+        SAVE_OFFLINE
+    }
+
+    data class PendingYtDlpAction(val song: Song, val action: YtDlpAction)
 
     private val _searchSource = MutableStateFlow(SearchSourceFilter.ALL)
     val searchSource: StateFlow<SearchSourceFilter> = _searchSource.asStateFlow()
@@ -65,6 +75,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _searchError = MutableStateFlow<String?>(null)
     val searchError: StateFlow<String?> = _searchError.asStateFlow()
+    private val _pendingYtDlpAction = MutableStateFlow<PendingYtDlpAction?>(null)
+    val pendingYtDlpAction: StateFlow<PendingYtDlpAction?> = _pendingYtDlpAction.asStateFlow()
+    private val _isDownloadingYtDlp = MutableStateFlow(false)
+    val isDownloadingYtDlp: StateFlow<Boolean> = _isDownloadingYtDlp.asStateFlow()
+    private val _operationMessage = MutableStateFlow<String?>(null)
+    val operationMessage: StateFlow<String?> = _operationMessage.asStateFlow()
+    private var searchJob: Job? = null
+    private var searchGeneration = 0L
 
     val allSongs: StateFlow<List<Song>> = repository.allSongs
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -154,6 +172,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val isLowBatteryMode: StateFlow<Boolean> = playerController.isLowBatteryMode
     val equalizerState: StateFlow<EqualizerState> = playerController.equalizerState
     val isBuffering: StateFlow<Boolean> = playerController.isBuffering
+    val playbackError: StateFlow<String?> = playerController.playbackError
 
     init {
         viewModelScope.launch {
@@ -210,19 +229,30 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun setSearchSource(source: SearchSourceFilter) {
         _searchSource.value = source
         if (_searchQuery.value.isNotBlank()) {
-            searchOnline(_searchQuery.value, saveToHistory = false)
+            if (source == SearchSourceFilter.YT_DLP) {
+                searchJob?.cancel()
+                _onlineSearchResults.value = emptyList()
+                _isSearching.value = false
+                _searchError.value = null
+            } else {
+                searchOnline(_searchQuery.value, saveToHistory = false)
+            }
         }
     }
 
     fun searchOnline(query: String, saveToHistory: Boolean = false) {
         val trimmed = query.trim()
         _searchQuery.value = trimmed
+        searchJob?.cancel()
+        val generation = ++searchGeneration
+        _searchError.value = null
         if (trimmed.isBlank()) {
             _onlineSearchResults.value = emptyList()
             _isSearching.value = false
             _searchError.value = null
             return
         }
+        _onlineSearchResults.value = emptyList()
 
         if (saveToHistory && trimmed.length >= 2) {
             viewModelScope.launch {
@@ -230,24 +260,34 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        viewModelScope.launch {
+        searchJob = viewModelScope.launch {
             _isSearching.value = true
             _searchError.value = null
             try {
+                delay(300)
                 val results = when (_searchSource.value) {
                     SearchSourceFilter.ALL -> repository.searchAllOnline(trimmed)
                     SearchSourceFilter.JIOSAAVN -> repository.searchJioSaavn(trimmed)
                     SearchSourceFilter.YOUTUBE_MUSIC -> repository.searchYouTubeMusic(trimmed)
                     SearchSourceFilter.YOUTUBE -> repository.searchYouTube(trimmed)
+                    SearchSourceFilter.YT_DLP -> repository.searchYtDlp(trimmed)
                 }
-                _onlineSearchResults.value = results
-                if (results.isEmpty()) {
-                    _searchError.value = "No songs found for \"$trimmed\" on ${_searchSource.value.displayName}. Try another search term."
+                if (generation == searchGeneration) {
+                    _onlineSearchResults.value = results
+                    if (results.isEmpty()) {
+                        _searchError.value = "No songs found for \"$trimmed\" on ${_searchSource.value.displayName}. Try another search term."
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _searchError.value = "Search error: ${e.localizedMessage ?: "Network issue"}"
+                if (generation == searchGeneration) {
+                    _searchError.value = "Search error: ${e.localizedMessage ?: "Network issue"}"
+                }
             } finally {
-                _isSearching.value = false
+                if (generation == searchGeneration) {
+                    _isSearching.value = false
+                }
             }
         }
     }
@@ -265,6 +305,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playSong(song: Song) {
+        if (song.source.equals("yt-dlp", ignoreCase = true) && !song.isCached) {
+            _pendingYtDlpAction.value = PendingYtDlpAction(song, YtDlpAction.PLAY)
+            return
+        }
+
+        playSongAfterDownload(song)
+    }
+
+    private fun playSongAfterDownload(song: Song) {
+        _onlineSearchResults.value = _onlineSearchResults.value.map {
+            if (it.id == song.id) song else it
+        }
         viewModelScope.launch {
             repository.insertSong(song)
             repository.recordPlay(song)
@@ -272,7 +324,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val currentQueue = if (_onlineSearchResults.value.any { it.id == song.id }) {
             _onlineSearchResults.value
         } else if (allSongs.value.any { it.id == song.id }) {
-            allSongs.value
+            allSongs.value.map { if (it.id == song.id) song else it }
         } else {
             listOf(song) + allSongs.value.filter { it.id != song.id }
         }
@@ -492,17 +544,60 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         playerController.updateCurrentSongState(updated)
         viewModelScope.launch {
             repository.insertSong(updated)
-            repository.toggleFavorite(song.id)
         }
     }
 
     fun cacheSong(song: Song) {
+        if (song.source.equals("yt-dlp", ignoreCase = true) && !song.isCached) {
+            _pendingYtDlpAction.value = PendingYtDlpAction(song, YtDlpAction.SAVE_OFFLINE)
+            return
+        }
+
         val updated = song.copy(isCached = true)
         playerController.updateCurrentSongState(updated)
         viewModelScope.launch {
             repository.insertSong(song)
             repository.cacheSong(song)
         }
+    }
+
+    fun dismissPendingYtDlpAction() {
+        _pendingYtDlpAction.value = null
+    }
+
+    fun confirmPendingYtDlpAction() {
+        val pending = _pendingYtDlpAction.value ?: return
+        if (_isDownloadingYtDlp.value) return
+
+        viewModelScope.launch {
+            _isDownloadingYtDlp.value = true
+            _operationMessage.value = null
+            try {
+                val downloaded = repository.downloadYtDlpSong(pending.song)
+                _onlineSearchResults.value = _onlineSearchResults.value.map {
+                    if (it.id == downloaded.id) downloaded else it
+                }
+                if (pending.action == YtDlpAction.PLAY) {
+                    playSongAfterDownload(downloaded)
+                } else {
+                    _operationMessage.value = "Saved “${downloaded.title}” to the selected yt-dlp folder."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "yt-dlp download failed for ${pending.song.id}", e)
+                _operationMessage.value = "Download failed: ${e.localizedMessage ?: "Unable to download this audio."}"
+            } finally {
+                _isDownloadingYtDlp.value = false
+                if (_pendingYtDlpAction.value == pending) {
+                    _pendingYtDlpAction.value = null
+                }
+            }
+        }
+    }
+
+    fun clearOperationMessage() {
+        _operationMessage.value = null
     }
 
     fun toggleAutoPlay() = playerController.toggleAutoPlay()

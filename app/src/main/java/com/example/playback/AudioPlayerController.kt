@@ -17,6 +17,7 @@ import com.example.util.SongTitleCleaner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -105,6 +106,9 @@ class AudioPlayerController(private val context: Context) {
 
     private val _isBuffering = MutableStateFlow(false)
     val isBuffering: StateFlow<Boolean> = _isBuffering.asStateFlow()
+
+    private val _playbackError = MutableStateFlow<String?>(null)
+    val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
 
     private var isSeeking = false
     private var lastSeekTimestamp = 0L
@@ -210,16 +214,19 @@ class AudioPlayerController(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 val queries = SongTitleCleaner.generateSearchQueries(song.title, song.artist)
-                val primaryTitle = SongTitleCleaner.cleanPrimaryTitle(song.title, song.artist)
                 var resolvedMatch: Song? = null
 
                 for (query in queries) {
                     val matches = JioSaavnService.search(query)
-                    // Strict match: must match primary title and be an original track
                     val candidate = matches.firstOrNull { c ->
                         c.streamUrl.isNotBlank() &&
-                        OriginalSongFilter.isOriginal(c, false) &&
-                        SongTitleCleaner.isFuzzyMatch(c.title, primaryTitle)
+                            OriginalSongFilter.isOriginal(c, false) &&
+                            SongTitleCleaner.isStrongTrackMatch(
+                                c.title,
+                                c.artist,
+                                song.title,
+                                song.artist
+                            )
                     }
 
                     if (candidate != null) {
@@ -252,8 +259,8 @@ class AudioPlayerController(private val context: Context) {
             }
             withContext(Dispatchers.Main) {
                 onComplete?.invoke(false)
-                if (_currentSong.value?.id == song.id && _isPlaying.value) {
-                    _isBuffering.value = false
+                if (_currentSong.value?.id == song.id) {
+                    reportPlaybackFailure(song, "No matching audio stream was found.")
                 }
             }
         }
@@ -261,6 +268,7 @@ class AudioPlayerController(private val context: Context) {
 
     fun isCurrentSongYouTube(): Boolean {
         val song = _currentSong.value ?: return false
+        if (song.source.equals("yt-dlp", ignoreCase = true)) return false
         // If an authentic direct audio stream was resolved for this song, route playback natively to MediaPlayer
         if (song.id == directStreamFallbackTrackId) {
             return false
@@ -335,6 +343,9 @@ class AudioPlayerController(private val context: Context) {
             } catch (e: Exception) {
                 Log.e("AudioPlayerController", "Error in onPrepared callback", e)
                 mediaPlayerState = MediaPlayerInternalState.ERROR
+                _currentSong.value?.let {
+                    reportPlaybackFailure(it, "The audio player failed while starting the stream.")
+                }
             }
         }
         player.setOnInfoListener { _, what, _ ->
@@ -389,6 +400,7 @@ class AudioPlayerController(private val context: Context) {
 
             mediaPlayerState = MediaPlayerInternalState.ERROR
             _isPlaying.value = false
+            _currentSong.value?.let { reportPlaybackFailure(it, "The audio stream failed.") }
             progressTrackerJob?.cancel()
 
             // Safely reset so native MediaPlayer does not stay permanently broken
@@ -410,10 +422,10 @@ class AudioPlayerController(private val context: Context) {
     private fun attemptStreamRecovery(resumePositionMs: Long) {
         val song = _currentSong.value ?: return
         if (streamRecoveryAttempts >= 3) {
-            Log.e("AudioPlayerController", "Max stream recovery attempts reached. Advancing track.")
+            Log.e("AudioPlayerController", "Max stream recovery attempts reached for ${song.title}.")
             streamRecoveryAttempts = 0
-            mediaPlayerState = MediaPlayerInternalState.COMPLETED
-            handleTrackCompletion()
+            mediaPlayerState = MediaPlayerInternalState.ERROR
+            reportPlaybackFailure(song, "The stream could not be recovered. Try playing it again.")
             return
         }
         streamRecoveryAttempts++
@@ -423,7 +435,7 @@ class AudioPlayerController(private val context: Context) {
             delay(500L * streamRecoveryAttempts)
             if (_currentSong.value?.id == song.id) {
                 val localPath = song.localFilePath
-                val isLocalFileUsable = localPath != null && File(localPath).exists() && File(localPath).length() > 5000
+                val isLocalFileUsable = isLocalAudioSourceUsable(localPath)
                 val rawSource = if (isLocalFileUsable) localPath!! else song.streamUrl
                 val targetSource = when (streamRecoveryAttempts) {
                     1 -> rawSource.replace("_320.mp4", "_160.mp4")
@@ -655,6 +667,7 @@ class AudioPlayerController(private val context: Context) {
     }
 
     fun playSong(song: Song) {
+        _playbackError.value = null
         val isDifferentSong = _currentSong.value?.id != song.id
         _currentSong.value = song
         _durationMs.value = song.durationMs.coerceAtLeast(1L)
@@ -703,12 +716,13 @@ class AudioPlayerController(private val context: Context) {
         youTubeWebPlayer.stop()
 
         val localPath = song.localFilePath
-        val isLocalFileUsable = localPath != null && File(localPath).exists() && File(localPath).length() > 5000
+        val isLocalFileUsable = isLocalAudioSourceUsable(localPath)
         val targetSource = if (isLocalFileUsable) localPath!! else song.streamUrl
 
         if (targetSource.isBlank()) {
             Log.e("AudioPlayerController", "Cannot play track with empty stream URL: ${song.title}")
             _isPlaying.value = false
+            reportPlaybackFailure(song, "This track has no playable audio source.")
             return
         }
 
@@ -762,6 +776,8 @@ class AudioPlayerController(private val context: Context) {
                         put("Connection", "keep-alive")
                     }
                     player.setDataSource(context, Uri.parse(cleanSource), headers)
+                } else if (cleanSource.startsWith("content://")) {
+                    player.setDataSource(context, Uri.parse(cleanSource))
                 } else {
                     player.setDataSource(cleanSource)
                 }
@@ -776,7 +792,22 @@ class AudioPlayerController(private val context: Context) {
             mediaPlayerState = MediaPlayerInternalState.ERROR
             _durationMs.value = song.durationMs
             _isPlaying.value = false
+            reportPlaybackFailure(song, "The audio player could not open this stream.")
         }
+    }
+
+    private fun isLocalAudioSourceUsable(path: String?): Boolean {
+        if (path.isNullOrBlank()) return false
+        if (path.startsWith("content://")) return true
+        val file = File(path)
+        return file.exists() && file.length() > 5000
+    }
+
+    private fun reportPlaybackFailure(song: Song, reason: String) {
+        if (_currentSong.value?.id != song.id) return
+        _isPlaying.value = false
+        _isBuffering.value = false
+        _playbackError.value = "Couldn't play ${song.title}. $reason"
     }
 
     fun pause() {
@@ -1076,6 +1107,7 @@ class AudioPlayerController(private val context: Context) {
     }
 
     fun release() {
+        scope.cancel()
         progressTrackerJob?.cancel()
         youTubeWebPlayer.release()
         equalizer?.release()

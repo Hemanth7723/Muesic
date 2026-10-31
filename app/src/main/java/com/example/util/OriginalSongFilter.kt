@@ -1,12 +1,13 @@
 package com.example.util
 
 import com.example.data.entity.Song
-import java.util.Locale
 
 object OriginalSongFilter {
     private val FORBIDDEN_PATTERN = Regex(
         "(?i)\\b(remix|remixes|mashup|mashups|cover|covers|slowed|reverb|nightcore|karaoke|instrumental|bass boosted|sped up|speed up|parody|reaction|10 hour|workout|tribute|orchestral|relaxing piano|mellow piano|acoustic cover|lofi|lo-fi|8d audio|8d|synthwave cover|ringtone|backing track|piano version|piano cover|clean edit|dj edit|originally performed by|melody karaoke|tribute to|in the style of)\\b"
     )
+    private val MIX_QUERY_PATTERN =
+        Regex("(?i)\\b(remix|cover|mashup|slowed|reverb|nightcore|karaoke|acoustic|instrumental)\\b")
 
     private val FORBIDDEN_ARTISTS = listOf(
         "zzang karaoke",
@@ -37,12 +38,11 @@ object OriginalSongFilter {
      */
     fun isOriginal(song: Song, allowNonOriginal: Boolean = false): Boolean {
         if (allowNonOriginal) return true
-        val combined = "${song.title} ${song.artist} ${song.album}".lowercase(Locale.ROOT)
+        val combined = "${song.title} ${song.artist} ${song.album}"
         if (combined.contains(FORBIDDEN_PATTERN)) {
             return false
         }
-        val artistLower = song.artist.lowercase(Locale.ROOT)
-        if (FORBIDDEN_ARTISTS.any { artistLower.contains(it) }) {
+        if (FORBIDDEN_ARTISTS.any { song.artist.contains(it, ignoreCase = true) }) {
             return false
         }
         return true
@@ -52,8 +52,6 @@ object OriginalSongFilter {
      * Checks if user explicitly typed words like 'remix' or 'cover' in their search query.
      */
     fun isUserSearchingForMix(query: String): Boolean {
-        return query.contains(
-            Regex("(?i)\\b(remix|cover|mashup|slowed|reverb|nightcore|karaoke|acoustic|instrumental)\\b")
-        )
+        return query.contains(MIX_QUERY_PATTERN)
     }
 }
