@@ -64,9 +64,6 @@ interface SongDao {
     @Update
     suspend fun updateSong(song: Song)
 
-    @Query("UPDATE songs SET isFavorite = CASE WHEN isFavorite = 1 THEN 0 ELSE 1 END WHERE id = :id")
-    suspend fun toggleFavorite(id: String)
-
     @Query("UPDATE songs SET isCached = :isCached, localFilePath = :localPath WHERE id = :id")
     suspend fun updateCacheStatus(id: String, isCached: Boolean, localPath: String?)
 
@@ -171,16 +168,16 @@ interface SearchHistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSearch(search: SearchHistory)
 
-    @Query("SELECT query FROM search_history ORDER BY timestamp DESC LIMIT 30")
+    @Query("SELECT `query` FROM search_history ORDER BY timestamp DESC LIMIT 30")
     fun getSearchHistory(): Flow<List<String>>
 
     @Query("SELECT * FROM search_history ORDER BY timestamp DESC")
     suspend fun getAllSearchHistory(): List<SearchHistory>
 
-    @Query("DELETE FROM search_history WHERE query = :query")
+    @Query("DELETE FROM search_history WHERE `query` = :query")
     suspend fun deleteSearch(query: String)
 
-    @Query("DELETE FROM search_history WHERE query != :query AND :query LIKE query || '%'")
+    @Query("DELETE FROM search_history WHERE `query` != :query AND :query LIKE `query` || '%'")
     suspend fun deletePrefixesOf(query: String)
 
     @Query("DELETE FROM search_history")
