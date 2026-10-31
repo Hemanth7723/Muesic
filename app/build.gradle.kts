@@ -23,11 +23,6 @@ val gitRepoUrl = providers.environmentVariable("GITHUB_REPOSITORY")
     .orElse(providers.gradleProperty("gitRepoUrl"))
     .getOrElse("https://github.com/Hemu1104/Muesic")
 
-val releaseKeystorePath = providers.environmentVariable("KEYSTORE_PATH").orNull
-val releaseStorePassword = providers.environmentVariable("STORE_PASSWORD").orNull
-val releaseKeyAlias = providers.environmentVariable("KEY_ALIAS").orNull
-val releaseKeyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -79,30 +74,62 @@ android {
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
-
-        ndk {
-            abiFilters.addAll(
-                listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-            )
-        }
     }
 
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-            isUniversalApk = true
-        }
-    }
-
-    // Release signing values are optional during project sync and debug builds.
+    /*
+     * RELEASE SIGNING
+     *
+     * Release builds MUST use the GitHub Actions release keystore.
+     * There is intentionally NO debug.keystore fallback here.
+     */
     signingConfigs {
         create("release") {
-            releaseKeystorePath?.let { storeFile = file(it) }
-            releaseStorePassword?.let { storePassword = it }
-            releaseKeyAlias?.let { keyAlias = it }
-            releaseKeyPassword?.let { keyPassword = it }
+            val keystorePath = System.getenv("KEYSTORE_PATH")
+                ?: throw GradleException(
+                    "KEYSTORE_PATH is not set. " +
+                        "Release builds require a release keystore."
+                )
+
+            val keystoreFile = file(keystorePath)
+
+            if (!keystoreFile.exists()) {
+                throw GradleException(
+                    "Release keystore not found: " +
+                        keystoreFile.absolutePath
+                )
+            }
+
+            val storePassword = System.getenv("STORE_PASSWORD")
+                ?: throw GradleException(
+                    "STORE_PASSWORD is not set."
+                )
+
+            val keyAlias = System.getenv("KEY_ALIAS")
+                ?: throw GradleException(
+                    "KEY_ALIAS is not set."
+                )
+
+            val keyPassword = System.getenv("KEY_PASSWORD")
+                ?: throw GradleException(
+                    "KEY_PASSWORD is not set."
+                )
+
+            storeFile = keystoreFile
+            this.storePassword = storePassword
+            this.keyAlias = keyAlias
+            this.keyPassword = keyPassword
+        }
+
+        /*
+         * DEBUG SIGNING
+         *
+         * Only used for local debug builds.
+         */
+        create("debugConfig") {
+            storeFile = file("${rootDir}/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
     }
 
@@ -121,6 +148,9 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
 
+        debug {
+            signingConfig = signingConfigs.getByName("debugConfig")
+        }
     }
 
     compileOptions {
@@ -142,43 +172,6 @@ android {
     dependenciesInfo {
         includeInApk = false
         includeInBundle = true
-    }
-
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
-}
-
-gradle.taskGraph.whenReady {
-    val releasePackagingTasks = allTasks.filter { task ->
-        val taskName = task.name.lowercase(Locale.ROOT)
-        taskName.contains("release") &&
-            listOf("assemble", "install", "bundle", "package")
-                .any(taskName::startsWith)
-    }
-
-    if (releasePackagingTasks.isNotEmpty()) {
-        val missingValues = mutableListOf<String>().apply {
-            if (releaseKeystorePath.isNullOrBlank()) add("KEYSTORE_PATH")
-            if (releaseStorePassword.isNullOrBlank()) add("STORE_PASSWORD")
-            if (releaseKeyAlias.isNullOrBlank()) add("KEY_ALIAS")
-            if (releaseKeyPassword.isNullOrBlank()) add("KEY_PASSWORD")
-        }
-        val keystoreFile = releaseKeystorePath?.let { project.file(it) }
-        if (keystoreFile == null || !keystoreFile.isFile) {
-            if ("KEYSTORE_PATH" !in missingValues) {
-                missingValues.add("KEYSTORE_PATH (file does not exist)")
-            }
-        }
-
-        if (missingValues.isNotEmpty()) {
-            throw GradleException(
-                "Release APK/AAB builds require a valid release keystore and signing credentials. " +
-                    "Configure: ${missingValues.joinToString()}."
-            )
-        }
     }
 }
 
@@ -217,8 +210,6 @@ dependencies {
     implementation(libs.androidx.room.runtime)
 
     implementation(libs.coil.compose)
-    implementation(libs.yt.dlp.android)
-    implementation(libs.yt.dlp.ffmpeg)
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)
