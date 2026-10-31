@@ -79,7 +79,6 @@ fun SearchScreen(
     onlineSearchResults: List<Song>,
     isSearching: Boolean,
     searchError: String?,
-    isDownloadingYtDlp: Boolean = false,
     activeSource: MusicViewModel.SearchSourceFilter,
     searchHistory: List<String> = emptyList(),
     currentSong: Song?,
@@ -126,7 +125,7 @@ fun SearchScreen(
                     letterSpacing = 1.5.sp
                 )
                 Text(
-                    text = "Search music catalogs or import a page URL with yt-dlp. Downloads require authorization.",
+                    text = "Stream millions of songs from JioSaavn, YouTube Music & YouTube • Zero API keys or login required",
                     style = MaterialTheme.typography.bodySmall,
                     color = appTheme.textSecondary
                 )
@@ -170,14 +169,6 @@ fun SearchScreen(
                             modifier = Modifier.testTag("source_filter_YOUTUBE")
                         )
                     }
-                    item {
-                        GlassPill(
-                            text = "yt-dlp URL",
-                            isSelected = activeSource == MusicViewModel.SearchSourceFilter.YT_DLP,
-                            onClick = { onSelectSource(MusicViewModel.SearchSourceFilter.YT_DLP) },
-                            modifier = Modifier.testTag("source_filter_YT_DLP")
-                        )
-                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -187,7 +178,7 @@ fun SearchScreen(
                     value = searchQuery,
                     onValueChange = {
                         searchQuery = it
-                        if (it.length >= 3 && activeSource != MusicViewModel.SearchSourceFilter.YT_DLP) {
+                        if (it.length >= 3) {
                             onSearch(it)
                         }
                     },
@@ -198,7 +189,6 @@ fun SearchScreen(
                                 MusicViewModel.SearchSourceFilter.JIOSAAVN -> "Search JioSaavn 320kbps catalog..."
                                 MusicViewModel.SearchSourceFilter.YOUTUBE_MUSIC -> "Search YouTube Music catalog..."
                                 MusicViewModel.SearchSourceFilter.YOUTUBE -> "Search YouTube songs & audio..."
-                                MusicViewModel.SearchSourceFilter.YT_DLP -> "Paste a supported HTTPS media page URL..."
                             },
                             color = appTheme.textMuted,
                             maxLines = 1,
@@ -284,10 +274,8 @@ fun SearchScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (isDownloadingYtDlp) {
-                                "Downloading audio with yt-dlp..."
-                            } else if (isSearching) {
-                                if (activeSource == MusicViewModel.SearchSourceFilter.YT_DLP) "Reading page metadata..." else "Searching ${activeSource.displayName}..."
+                            text = if (isSearching) {
+                                "Searching JioSaavn..."
                             } else {
                                 "${displayedSongs.size} tracks found"
                             },
@@ -295,11 +283,7 @@ fun SearchScreen(
                             color = if (isSearching) appTheme.accent else appTheme.textSecondary
                         )
                         Text(
-                            text = if (activeSource == MusicViewModel.SearchSourceFilter.YT_DLP) {
-                                "URL import • HTTPS only"
-                            } else {
-                                "Online audio source"
-                            },
+                            text = "Direct JioSaavn HD Stream",
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                             color = EmeraldHifi
                         )
@@ -309,7 +293,7 @@ fun SearchScreen(
         }
 
         // Searching Spinner Card
-        if (isSearching || isDownloadingYtDlp) {
+        if (isSearching) {
             item {
                 Box(
                     modifier = Modifier
@@ -325,16 +309,12 @@ fun SearchScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = if (isDownloadingYtDlp) "Downloading authorized audio..." else "Fetching audio details...",
+                            text = "Fetching high-fidelity audio streams...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = appTheme.textPrimary
                         )
                         Text(
-                            text = if (activeSource == MusicViewModel.SearchSourceFilter.YT_DLP) {
-                                "yt-dlp extracts audio from the supplied page URL"
-                            } else {
-                                "Connecting to ${activeSource.displayName}"
-                            },
+                            text = "Connecting directly to JioSaavn & YouTube Music",
                             style = MaterialTheme.typography.bodySmall,
                             color = appTheme.textSecondary
                         )
@@ -652,7 +632,6 @@ fun SearchScreen(
                             ) {
                                 // Source Badge
                                 val (sourceBadgeText, sourceBadgeColor) = when {
-                                    song.source.equals("yt-dlp", ignoreCase = true) -> "yt-dlp" to appTheme.accentSecondary
                                     song.source.contains("YouTube Music", ignoreCase = true) -> "YT Music" to NeonPink
                                     song.source.contains("YouTube", ignoreCase = true) -> "YouTube" to Color(0xFFFF5252)
                                     else -> "JioSaavn • 320k" to EmeraldHifi

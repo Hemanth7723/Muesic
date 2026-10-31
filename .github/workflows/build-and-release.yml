@@ -4,38 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  verify-main-tag:
-    name: Verify tagged commit is on main
-    runs-on: ubuntu-latest
-    outputs:
-      eligible: ${{ steps.check.outputs.eligible }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check tagged commit is reachable from main
-        id: check
-        run: |
-          git fetch origin main
-          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "eligible=true" >> "$GITHUB_OUTPUT"
-            echo "Tagged commit is on main; continuing release build."
-          else
-            echo "eligible=false" >> "$GITHUB_OUTPUT"
-            echo "Tagged commit is not on main; skipping release build."
-          fi
-
   build:
     name: Build & Release APK
-    needs: verify-main-tag
-    if: needs.verify-main-tag.outputs.eligible == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -131,15 +107,14 @@ jobs:
       # EXTRACT GIT METADATA
       # ---------------------------------------------------------
       - name: Extract Git Metadata
-        id: metadata
         run: |
-          GIT_COMMIT_HASH=$(git rev-parse --short HEAD)
-          GIT_TAG="$GITHUB_REF_NAME"
+          GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "$GITHUB_REF_NAME")
           GIT_COMMIT_DATE=$(git log -1 --format=%cd --date=format:"%B %d, %Y")
+          GIT_COMMIT_HASH=$(git rev-parse --short HEAD)
 
-          echo "tag=$GIT_TAG" >> "$GITHUB_OUTPUT"
-          echo "commit_date=$GIT_COMMIT_DATE" >> "$GITHUB_OUTPUT"
-          echo "commit_hash=$GIT_COMMIT_HASH" >> "$GITHUB_OUTPUT"
+          echo "GIT_TAG=$GIT_TAG" >> "$GITHUB_ENV"
+          echo "GIT_COMMIT_DATE=$GIT_COMMIT_DATE" >> "$GITHUB_ENV"
+          echo "GIT_COMMIT_HASH=$GIT_COMMIT_HASH" >> "$GITHUB_ENV"
 
           echo "======================================"
           echo "Muesic Release Build"
@@ -159,9 +134,9 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-          GIT_TAG: ${{ steps.metadata.outputs.tag }}
-          GIT_COMMIT_DATE: ${{ steps.metadata.outputs.commit_date }}
-          GIT_COMMIT_HASH: ${{ steps.metadata.outputs.commit_hash }}
+          GIT_TAG: ${{ env.GIT_TAG }}
+          GIT_COMMIT_DATE: ${{ env.GIT_COMMIT_DATE }}
+          GIT_COMMIT_HASH: ${{ env.GIT_COMMIT_HASH }}
 
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_SHA: ${{ github.sha }}
@@ -194,39 +169,43 @@ jobs:
             -name "*.apk" \
             -print
 
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64 universal; do
-            APK="app/build/outputs/apk/release/app-${ABI}-release.apk"
-            if [ ! -s "$APK" ]; then
-              echo "ERROR: Expected APK was not generated: $APK"
-              exit 1
-            fi
-          done
+          APK_COUNT=$(find app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: No release APK was generated."
+            exit 1
+          fi
+
+          echo "Found $APK_COUNT APK file(s)."
 
       # ---------------------------------------------------------
-      # RENAME UNIVERSAL AND ABI-SPECIFIC APKs
+      # RENAME APK
       # ---------------------------------------------------------
-      - name: Rename APKs
-        env:
-          GIT_TAG: ${{ steps.metadata.outputs.tag }}
+      - name: Rename APK
         run: |
-          OUTPUT_DIR="app/build/outputs/apk/release"
-          mv "$OUTPUT_DIR/app-universal-release.apk" \
-            "$OUTPUT_DIR/Muesic_${GIT_TAG}.apk"
+          APK=$(find app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" | head -n 1)
 
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
-            mv "$OUTPUT_DIR/app-${ABI}-release.apk" \
-              "$OUTPUT_DIR/Muesic_${GIT_TAG}_${ABI}.apk"
-          done
+          OUTPUT="app/build/outputs/apk/release/Muesic_${GITHUB_REF_NAME}.apk"
 
-          ls -lh "$OUTPUT_DIR"/Muesic_"${GIT_TAG}"*.apk
+          mv "$APK" "$OUTPUT"
+
+          echo "======================================"
+          echo "Final APK"
+          echo "======================================"
+
+          ls -lh "$OUTPUT"
 
       # ---------------------------------------------------------
       # VERIFY APK SIGNATURE
       # ---------------------------------------------------------
       - name: Verify APK Signature
-        env:
-          GIT_TAG: ${{ steps.metadata.outputs.tag }}
         run: |
+          APK="app/build/outputs/apk/release/Muesic_${GITHUB_REF_NAME}.apk"
+
           echo "Verifying APK signature..."
 
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
@@ -238,21 +217,21 @@ jobs:
             exit 1
           fi
 
-          for APK in app/build/outputs/apk/release/Muesic_"${GIT_TAG}"*.apk; do
-            "$APKSIGNER" verify --verbose "$APK"
-          done
+          "$APKSIGNER" verify \
+            --verbose \
+            "$APK"
 
-          echo "All APK signatures verified successfully."
+          echo "APK signature verified successfully."
 
+      # ---------------------------------------------------------
+      # CREATE GITHUB RELEASE
+      # ---------------------------------------------------------
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            app/build/outputs/apk/release/Muesic_${{ steps.metadata.outputs.tag }}.apk
-            app/build/outputs/apk/release/Muesic_${{ steps.metadata.outputs.tag }}_arm64-v8a.apk
-            app/build/outputs/apk/release/Muesic_${{ steps.metadata.outputs.tag }}_armeabi-v7a.apk
-            app/build/outputs/apk/release/Muesic_${{ steps.metadata.outputs.tag }}_x86.apk
-            app/build/outputs/apk/release/Muesic_${{ steps.metadata.outputs.tag }}_x86_64.apk
+            app/build/outputs/apk/release/Muesic_${{ github.ref_name }}.apk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,8 +2,6 @@ package com.example.data.repository
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
-import android.net.Uri
-import android.provider.DocumentsContract
 import android.util.Log
 import com.example.data.AppDatabase
 import com.example.data.entity.ListeningRecord
@@ -14,8 +12,6 @@ import com.example.data.entity.Song
 import com.example.data.network.JioSaavnService
 import com.example.data.network.YouTubeMusicService
 import com.example.data.network.YouTubeService
-import com.example.data.network.YtDlpService
-import com.example.util.SongTitleCleaner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -34,8 +30,6 @@ import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
-
-private val SEARCH_SIGNATURE_NON_ALPHANUMERIC = Regex("[^a-z0-9]")
 
 enum class AutoPlayMode(val displayName: String) {
     SMART_MIX("Smart Mix"),
@@ -118,16 +112,6 @@ class MusicRepository(private val context: Context) {
         return YouTubeService.search(query).filter { com.example.util.OriginalSongFilter.isOriginal(it, isExplicitMixSearch) }
     }
 
-    suspend fun searchYtDlp(pageUrl: String): List<Song> {
-        val song = YtDlpService.getSong(context, pageUrl)
-        val cachedSong = songDao.getSongById(song.id)
-        return listOf(
-            cachedSong?.takeIf {
-                it.isCached && it.localFilePath?.startsWith("content://") == true
-            } ?: song
-        )
-    }
-
     suspend fun searchAllOnline(query: String): List<Song> = coroutineScope {
         val isExplicitMixSearch = com.example.util.OriginalSongFilter.isUserSearchingForMix(query)
         val ytmDeferred = async { try { YouTubeMusicService.search(query) } catch (e: Exception) { emptyList() } }
@@ -142,7 +126,7 @@ class MusicRepository(private val context: Context) {
         val seenSignatures = mutableSetOf<String>()
 
         fun addIfNew(s: Song) {
-            val sig = "${s.title.lowercase(Locale.ROOT).replace(SEARCH_SIGNATURE_NON_ALPHANUMERIC, "")}_${s.artist.lowercase(Locale.ROOT).replace(SEARCH_SIGNATURE_NON_ALPHANUMERIC, "").take(6)}"
+            val sig = "${s.title.lowercase().replace(Regex("[^a-z0-9]"), "")}_${s.artist.lowercase().replace(Regex("[^a-z0-9]"), "").take(6)}"
             if (seenSignatures.add(sig)) {
                 combined.add(s)
             }
@@ -166,6 +150,8 @@ class MusicRepository(private val context: Context) {
     fun getSongsForPlaylist(playlistId: String): Flow<List<Song>> = playlistDao.getSongsForPlaylist(playlistId)
 
     suspend fun getSongById(id: String): Song? = songDao.getSongById(id)
+
+    suspend fun toggleFavorite(songId: String) = songDao.toggleFavorite(songId)
 
     suspend fun recordPlay(song: Song) {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -209,17 +195,7 @@ class MusicRepository(private val context: Context) {
     }
 
     // Cache and Offline Song Management
-    suspend fun cacheSong(song: Song): Boolean = withContext(Dispatchers.IO) {
-        if (song.source.equals("yt-dlp", ignoreCase = true)) {
-            return@withContext try {
-                downloadYtDlpSong(song)
-                true
-            } catch (e: Exception) {
-                Log.e("MusicRepository", "Failed to cache yt-dlp audio ${song.id}", e)
-                false
-            }
-        }
-
+    suspend fun cacheSong(song: Song, onProgress: (Float) -> Unit = {}): Boolean = withContext(Dispatchers.IO) {
         val targetFolder = settingsManager.getBackupFolder()
         if (!targetFolder.exists()) {
             targetFolder.mkdirs()
@@ -243,21 +219,11 @@ class MusicRepository(private val context: Context) {
         var downloadUrl = song.streamUrl
         if (downloadUrl.contains("youtube.com") || downloadUrl.contains("youtu.be")) {
             try {
-                val queries = SongTitleCleaner.generateSearchQueries(song.title, song.artist)
-                var matchingSong: Song? = null
-                for (query in queries) {
-                    matchingSong = JioSaavnService.search(query).firstOrNull { candidate ->
-                        candidate.streamUrl.isNotBlank() &&
-                            SongTitleCleaner.isStrongTrackMatch(
-                                candidate.title,
-                                candidate.artist,
-                                song.title,
-                                song.artist
-                            )
-                    }
-                    if (matchingSong != null) break
+                val cleanedTitle = song.title.replace(Regex("(?i)\\(.*?\\)|\\[.*?\\]"), "").trim()
+                val matches = JioSaavnService.search("$cleanedTitle ${song.artist}".trim()).ifEmpty {
+                    JioSaavnService.search(cleanedTitle)
                 }
-                val stream = matchingSong?.streamUrl
+                val stream = matches.firstOrNull()?.streamUrl
                 if (!stream.isNullOrBlank()) {
                     downloadUrl = stream
                     songDao.insertSong(song.copy(streamUrl = stream))
@@ -298,6 +264,9 @@ class MusicRepository(private val context: Context) {
                     var count: Int
                     while (input.read(data).also { count = it } != -1) {
                         total += count
+                        if (fileLength > 0) {
+                            onProgress(total.toFloat() / fileLength)
+                        }
                         output.write(data, 0, count)
                     }
                     output.flush()
@@ -321,121 +290,12 @@ class MusicRepository(private val context: Context) {
         }
     }
 
-    suspend fun downloadYtDlpSong(song: Song): Song = withContext(Dispatchers.IO) {
-        val existingUri = song.localFilePath?.takeIf {
-            song.isCached && it.startsWith("content://")
-        }
-        if (existingUri != null) return@withContext song
-
-        val folderUriString = settingsManager.getYtDlpDownloadFolderUri()
-            ?: throw IllegalStateException("Choose a yt-dlp download folder in Settings first.")
-        val folderUri = Uri.parse(folderUriString)
-        if (!DocumentsContract.isTreeUri(folderUri)) {
-            throw IllegalStateException("The selected yt-dlp folder is no longer available. Choose it again in Settings.")
-        }
-
-        val safeId = song.id.replace(Regex("[^A-Za-z0-9_-]"), "_")
-        val safeName = "${song.title} - ${song.artist}"
-            .replace(Regex("[^A-Za-z0-9 ._-]"), "_")
-            .trim()
-            .take(100)
-            .ifBlank { "audio" }
-        val displayName = "$safeName [$safeId].mp3"
-        val tempFile = File(context.cacheDir, "ytdlp_downloads/$safeId.mp3")
-        var destinationUri: Uri? = null
-
-        try {
-            YtDlpService.downloadAudio(context, song.streamUrl, tempFile)
-
-            val resolver = context.contentResolver
-            val parentDocumentId = DocumentsContract.getTreeDocumentId(folderUri)
-            val parentDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
-                folderUri,
-                parentDocumentId
-            )
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                folderUri,
-                parentDocumentId
-            )
-            resolver.query(
-                childrenUri,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
-                ),
-                null,
-                null,
-                null
-            )?.use { cursor ->
-                val idColumn = cursor.getColumnIndexOrThrow(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID
-                )
-                val nameColumn = cursor.getColumnIndexOrThrow(
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
-                )
-                while (cursor.moveToNext()) {
-                    if (cursor.getString(nameColumn) == displayName) {
-                        val existingDocument = DocumentsContract.buildDocumentUriUsingTree(
-                            folderUri,
-                            cursor.getString(idColumn)
-                        )
-                        if (!DocumentsContract.deleteDocument(resolver, existingDocument)) {
-                            throw IllegalStateException("Could not replace the previous audio file.")
-                        }
-                        break
-                    }
-                }
-            }
-
-            val createdDocumentUri = DocumentsContract.createDocument(
-                resolver,
-                parentDocumentUri,
-                "audio/mpeg",
-                displayName
-            ) ?: throw IllegalStateException("Could not create an audio file in the selected folder.")
-            destinationUri = createdDocumentUri
-
-            val output = resolver.openOutputStream(createdDocumentUri, "w")
-                ?: throw IllegalStateException("Could not write to the selected download folder.")
-            tempFile.inputStream().use { input ->
-                output.use { input.copyTo(it) }
-            }
-
-            val downloadedSong = song.copy(
-                localFilePath = createdDocumentUri.toString(),
-                isCached = true,
-                audioQuality = "Downloaded MP3 - yt-dlp"
-            )
-            songDao.insertSong(downloadedSong)
-            downloadedSong
-        } catch (e: Exception) {
-            destinationUri?.let {
-                runCatching { DocumentsContract.deleteDocument(context.contentResolver, it) }
-            }
-            throw e
-        } finally {
-            tempFile.delete()
-        }
-    }
-
     suspend fun removeDownloadedSong(song: Song): Boolean = withContext(Dispatchers.IO) {
         var deleted = false
         if (!song.localFilePath.isNullOrBlank()) {
-            if (song.localFilePath.startsWith("content://")) {
-                deleted = try {
-                    DocumentsContract.deleteDocument(
-                        context.contentResolver,
-                        Uri.parse(song.localFilePath)
-                    )
-                } catch (e: Exception) {
-                    Log.w("MusicRepository", "Could not delete downloaded document for ${song.id}", e)
-                    false
-                }
-            } else {
-                val file = File(song.localFilePath)
-                if (file.exists()) {
-                    deleted = file.delete()
-                }
+            val file = File(song.localFilePath)
+            if (file.exists()) {
+                deleted = file.delete()
             }
         }
         val cleanArtist = song.artist.replace(Regex("[^a-zA-Z0-9 ._-]"), "_").trim()
@@ -474,13 +334,8 @@ class MusicRepository(private val context: Context) {
                 val filePath = song.localFilePath
                 val exists = if (!filePath.isNullOrBlank()) {
                     try {
-                        if (filePath.startsWith("content://")) {
-                            context.contentResolver.openFileDescriptor(Uri.parse(filePath), "r")
-                                ?.use { it.statSize <= 0L || it.statSize > 5_000L } == true
-                        } else {
-                            val f = File(filePath)
-                            f.exists() && f.length() > 5_000L
-                        }
+                        val f = File(filePath)
+                        f.exists() && f.length() > 50_000
                     } catch (e: Exception) {
                         false
                     }
@@ -651,7 +506,6 @@ class MusicRepository(private val context: Context) {
         if (currentSong != null) {
             val sameArtist = songDao.getSongsByArtist(currentSong.artist, currentSong.id)
                 .filter { it.id !in excludeIds }
-            val sameArtistIds = sameArtist.mapTo(mutableSetOf()) { it.id }
             sameArtist.forEach {
                 relatedCandidates.add(
                     AutoPlaySuggestion(
@@ -664,7 +518,7 @@ class MusicRepository(private val context: Context) {
             }
 
             val sameGenre = songDao.getSongsByGenre(currentSong.genre, currentSong.id)
-                .filter { it.id !in excludeIds && it.id !in sameArtistIds }
+                .filter { it.id !in excludeIds && it.id !in sameArtist.map { s -> s.id } }
             sameGenre.forEach {
                 relatedCandidates.add(
                     AutoPlaySuggestion(
@@ -721,7 +575,6 @@ class MusicRepository(private val context: Context) {
 
         // 2a. User's Liked / Favorite songs
         val favoriteSongs = songDao.getFavoriteSongsList().filter { it.id !in excludeIds }
-        val historyCandidateIds = favoriteSongs.mapTo(mutableSetOf()) { it.id }
         favoriteSongs.forEach {
             historyCandidates.add(
                 AutoPlaySuggestion(
@@ -735,9 +588,8 @@ class MusicRepository(private val context: Context) {
 
         // 2b. User's Most Played songs from history
         val topPlayed = songDao.getTopPlayedSongs(20)
-            .filter { it.id !in excludeIds && it.id !in historyCandidateIds }
+            .filter { it.id !in excludeIds && it.id !in favoriteSongs.map { s -> s.id } }
         topPlayed.forEach {
-            historyCandidateIds.add(it.id)
             historyCandidates.add(
                 AutoPlaySuggestion(
                     song = it,
@@ -756,7 +608,7 @@ class MusicRepository(private val context: Context) {
                     .filter { it.id !in excludeIds }
                     .take(3)
                 genreTracks.forEach {
-                    if (historyCandidateIds.add(it.id)) {
+                    if (historyCandidates.none { c -> c.song.id == it.id }) {
                         historyCandidates.add(
                             AutoPlaySuggestion(
                                 song = it,
@@ -774,8 +626,8 @@ class MusicRepository(private val context: Context) {
 
         // 3. Selection according to requested criteria:
         val orderedCandidates = mutableListOf<AutoPlaySuggestion>()
-        val relShuffled = relatedCandidates.shuffled()
-        val histShuffled = historyCandidates.shuffled()
+        val relShuffled = relatedCandidates.shuffled().toMutableList()
+        val histShuffled = historyCandidates.shuffled().toMutableList()
 
         when (preferredMode) {
             AutoPlayMode.RELATED_SONGS -> {
@@ -787,15 +639,10 @@ class MusicRepository(private val context: Context) {
                 orderedCandidates.addAll(relShuffled)
             }
             AutoPlayMode.SMART_MIX -> {
-                var relatedIndex = 0
-                var historyIndex = 0
-                while (relatedIndex < relShuffled.size || historyIndex < histShuffled.size) {
-                    if (relatedIndex < relShuffled.size) {
-                        orderedCandidates.add(relShuffled[relatedIndex++])
-                    }
-                    if (historyIndex < histShuffled.size) {
-                        orderedCandidates.add(histShuffled[historyIndex++])
-                    }
+                // Interleave 1 related, 1 history
+                while (relShuffled.isNotEmpty() || histShuffled.isNotEmpty()) {
+                    if (relShuffled.isNotEmpty()) orderedCandidates.add(relShuffled.removeAt(0))
+                    if (histShuffled.isNotEmpty()) orderedCandidates.add(histShuffled.removeAt(0))
                 }
             }
         }
@@ -945,12 +792,12 @@ class MusicRepository(private val context: Context) {
 
         val rootObj = JSONObject()
         rootObj.put("app", "Muesic")
-        val about = settingsManager.getAboutInfo()
-        rootObj.put("version", about.appVersion)
+        rootObj.put("version", settingsManager.getAboutInfo().appVersion)
         rootObj.put("exportType", "config_and_playlists")
         rootObj.put("exportedAt", timestamp)
 
         // Config & Settings
+        val about = settingsManager.getAboutInfo()
         val configObj = JSONObject().apply {
             put("developerName", about.developerName)
             put("appName", about.appName)
@@ -964,7 +811,18 @@ class MusicRepository(private val context: Context) {
         // User Playlists
         val playlistsList = playlistDao.getAllPlaylistsList()
         val playlistsArray = JSONArray()
-        playlistsList.forEach { playlistsArray.put(it.toJsonObject()) }
+        playlistsList.forEach { pl ->
+            val pObj = JSONObject().apply {
+                put("id", pl.id)
+                put("title", pl.title)
+                put("description", pl.description)
+                put("createdAt", pl.createdAt)
+                put("isCollaborative", pl.isCollaborative)
+                put("shareCode", pl.shareCode)
+                put("contributorNames", pl.contributorNames)
+            }
+            playlistsArray.put(pObj)
+        }
         rootObj.put("playlists", playlistsArray)
 
         // Cross references
@@ -973,7 +831,12 @@ class MusicRepository(private val context: Context) {
         val playlistSongIds = mutableSetOf<String>()
         crossRefsList.forEach { ref ->
             playlistSongIds.add(ref.songId)
-            refsArray.put(ref.toJsonObject())
+            val rObj = JSONObject().apply {
+                put("playlistId", ref.playlistId)
+                put("songId", ref.songId)
+                put("addedAt", ref.addedAt)
+            }
+            refsArray.put(rObj)
         }
         rootObj.put("playlistCrossRefs", refsArray)
 
@@ -1142,13 +1005,29 @@ class MusicRepository(private val context: Context) {
         // All Playlists
         val playlists = playlistDao.getAllPlaylistsList()
         val plArr = JSONArray()
-        playlists.forEach { plArr.put(it.toJsonObject()) }
+        playlists.forEach { p ->
+            plArr.put(JSONObject().apply {
+                put("id", p.id)
+                put("title", p.title)
+                put("description", p.description)
+                put("createdAt", p.createdAt)
+                put("isCollaborative", p.isCollaborative)
+                put("shareCode", p.shareCode)
+                put("contributorNames", p.contributorNames)
+            })
+        }
         root.put("playlists", plArr)
 
         // Cross refs
         val refs = playlistDao.getAllCrossRefsList()
         val refArr = JSONArray()
-        refs.forEach { refArr.put(it.toJsonObject()) }
+        refs.forEach { r ->
+            refArr.put(JSONObject().apply {
+                put("playlistId", r.playlistId)
+                put("songId", r.songId)
+                put("addedAt", r.addedAt)
+            })
+        }
         root.put("playlistCrossRefs", refArr)
 
         backupFile.writeText(root.toString(2), Charsets.UTF_8)
@@ -1189,12 +1068,30 @@ class MusicRepository(private val context: Context) {
 
         val playlistsList = playlistDao.getAllPlaylistsList()
         val playlistsArray = JSONArray()
-        playlistsList.forEach { playlistsArray.put(it.toJsonObject()) }
+        playlistsList.forEach { pl ->
+            val pObj = JSONObject().apply {
+                put("id", pl.id)
+                put("title", pl.title)
+                put("description", pl.description)
+                put("createdAt", pl.createdAt)
+                put("isCollaborative", pl.isCollaborative)
+                put("shareCode", pl.shareCode)
+                put("contributorNames", pl.contributorNames)
+            }
+            playlistsArray.put(pObj)
+        }
         rootObj.put("playlists", playlistsArray)
 
         val crossRefsList = playlistDao.getAllCrossRefsList()
         val refsArray = JSONArray()
-        crossRefsList.forEach { refsArray.put(it.toJsonObject()) }
+        crossRefsList.forEach { ref ->
+            val rObj = JSONObject().apply {
+                put("playlistId", ref.playlistId)
+                put("songId", ref.songId)
+                put("addedAt", ref.addedAt)
+            }
+            refsArray.put(rObj)
+        }
         rootObj.put("playlistCrossRefs", refsArray)
 
         rootObj.toString(2)
@@ -1548,19 +1445,3 @@ data class ImportResult(
     val message: String,
     val playlistId: String? = null
 )
-
-private fun Playlist.toJsonObject() = JSONObject().apply {
-    put("id", id)
-    put("title", title)
-    put("description", description)
-    put("createdAt", createdAt)
-    put("isCollaborative", isCollaborative)
-    put("shareCode", shareCode)
-    put("contributorNames", contributorNames)
-}
-
-private fun PlaylistSongCrossRef.toJsonObject() = JSONObject().apply {
-    put("playlistId", playlistId)
-    put("songId", songId)
-    put("addedAt", addedAt)
-}
