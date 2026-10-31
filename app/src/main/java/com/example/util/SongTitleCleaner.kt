@@ -3,6 +3,15 @@ package com.example.util
 import java.util.Locale
 
 object SongTitleCleaner {
+    private val DASH_PARTS = Regex("\\s+-\\s+")
+    private val NON_ALPHANUMERIC = Regex("[^a-z0-9]")
+    private val NON_ALPHANUMERIC_WITH_SPACES = Regex("[^a-zA-Z0-9\\s]")
+    private val WHITESPACE = Regex("\\s+")
+    private val TITLE_SEGMENT_SEPARATOR = Regex("[|•/:]")
+    private val QUERY_SEGMENT_SEPARATOR = Regex("[|•]")
+    private val ARTIST_SEPARATOR = Regex("(?i)\\s*(?:,|&|/|\\bfeat\\.?\\b|\\bft\\.?\\b)\\s*")
+    private val ARTIST_NOISE = Regex("(?i)\\b(topic|vevo|records|music|official)\\b")
+
     private val NOISE_PATTERNS = listOf(
         Regex("(?i)\\b(official\\s+video|official\\s+music\\s+video|music\\s+video|official\\s+audio|audio\\s+track|lyric\\s+video|lyrics\\s+video|lyrical\\s+video|full\\s+song|full\\s+video\\s+song|video\\s+song|audio\\s+song|original\\s+soundtrack|ost|remastered|4k|hd|1080p|visualizer|audio)\\b"),
         Regex("(?i)\\[.*?\\]"),
@@ -12,8 +21,9 @@ object SongTitleCleaner {
     )
 
     private val GENERIC_ARTISTS = setOf(
-        "youtube", "youtube music", "youtube audio", "various artists",
-        "unknown", "unknown artist", "topic", "vevo", "records", "music"
+        "youtube", "youtube music", "youtube creator", "youtube audio",
+        "various artists", "unknown", "unknown artist", "topic", "vevo",
+        "records", "music"
     )
 
     /**
@@ -27,13 +37,13 @@ object SongTitleCleaner {
         }
 
         // Check for "Artist - Title" or "Title - Artist" format
-        val dashParts = t.split(Regex("\\s+-\\s+")).map { it.trim() }.filter { it.isNotBlank() }
+        val dashParts = t.split(DASH_PARTS).map { it.trim() }.filter { it.isNotBlank() }
         if (dashParts.size >= 2) {
             val partA = dashParts[0]
             val partB = dashParts[1]
-            val normArtist = rawArtist.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
-            val normA = partA.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
-            val normB = partB.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
+            val normArtist = rawArtist.lowercase(Locale.ROOT).replace(NON_ALPHANUMERIC, "")
+            val normA = partA.lowercase(Locale.ROOT).replace(NON_ALPHANUMERIC, "")
+            val normB = partB.lowercase(Locale.ROOT).replace(NON_ALPHANUMERIC, "")
 
             t = if (normArtist.isNotBlank() && (normArtist.contains(normA) || normA.contains(normArtist))) {
                 // partA is the artist, so partB is the title
@@ -47,11 +57,11 @@ object SongTitleCleaner {
             }
         } else {
             // Split by pipe, bullet, colon, or slash
-            val firstSegment = t.split(Regex("[|•/:]")).firstOrNull()?.trim() ?: t
+            val firstSegment = t.split(TITLE_SEGMENT_SEPARATOR).firstOrNull()?.trim() ?: t
             t = firstSegment
         }
 
-        return t.replace(Regex("[^a-zA-Z0-9\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+        return t.replace(NON_ALPHANUMERIC_WITH_SPACES, " ").replace(WHITESPACE, " ").trim()
     }
 
     /**
@@ -62,14 +72,14 @@ object SongTitleCleaner {
         val queries = mutableListOf<String>()
 
         // Check if there is a secondary movie / album segment
-        val segments = rawTitle.split(Regex("[|•]")).map { it.trim() }.filter { it.isNotBlank() }
+        val segments = rawTitle.split(QUERY_SEGMENT_SEPARATOR).map { it.trim() }.filter { it.isNotBlank() }
         var secondarySegment: String? = null
         if (segments.size > 1) {
             var s = segments[1]
             for (pattern in NOISE_PATTERNS) {
                 s = s.replace(pattern, " ")
             }
-            s = s.replace(Regex("[^a-zA-Z0-9\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+            s = s.replace(NON_ALPHANUMERIC_WITH_SPACES, " ").replace(WHITESPACE, " ").trim()
             if (s.length > 2) {
                 secondarySegment = s
             }
@@ -78,17 +88,17 @@ object SongTitleCleaner {
         val artistLower = rawArtist.lowercase(Locale.ROOT).trim()
         val isGenericArtist = rawArtist.length <= 2 || GENERIC_ARTISTS.any { artistLower.contains(it) }
         val cleanArtist = if (!isGenericArtist) {
-            rawArtist.replace(Regex("(?i)\\b(topic|vevo|records|music|official)\\b"), "")
-                .replace(Regex("[^a-zA-Z0-9\\s]"), " ")
-                .replace(Regex("\\s+"), " ")
+            rawArtist.replace(ARTIST_NOISE, "")
+                .replace(NON_ALPHANUMERIC_WITH_SPACES, " ")
+                .replace(WHITESPACE, " ")
                 .trim()
         } else ""
 
         // Also check if rawTitle had a dash with artist
         var titleArtistPart = ""
-        val dashParts = rawTitle.split(Regex("\\s+-\\s+")).map { it.trim() }.filter { it.isNotBlank() }
+        val dashParts = rawTitle.split(DASH_PARTS).map { it.trim() }.filter { it.isNotBlank() }
         if (dashParts.size >= 2) {
-            val p0 = dashParts[0].replace(Regex("[^a-zA-Z0-9\\s]"), " ").trim()
+            val p0 = dashParts[0].replace(NON_ALPHANUMERIC_WITH_SPACES, " ").trim()
             if (cleanArtist.isBlank() || p0.contains(cleanArtist, ignoreCase = true)) {
                 titleArtistPart = p0
             }
@@ -120,7 +130,10 @@ object SongTitleCleaner {
         for (pattern in NOISE_PATTERNS) {
             cleanedRaw = cleanedRaw.replace(pattern, " ")
         }
-        cleanedRaw = cleanedRaw.replace(Regex("[|•/:]"), " ").replace(Regex("[^a-zA-Z0-9\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+        cleanedRaw = cleanedRaw.replace(TITLE_SEGMENT_SEPARATOR, " ")
+            .replace(NON_ALPHANUMERIC_WITH_SPACES, " ")
+            .replace(WHITESPACE, " ")
+            .trim()
         if (cleanedRaw.isNotBlank() && cleanedRaw != primary) {
             queries.add(cleanedRaw)
         }
@@ -132,9 +145,42 @@ object SongTitleCleaner {
      * Checks if a candidate track matches the target query/primary title.
      */
     fun isFuzzyMatch(candidateTitle: String, primaryTitle: String): Boolean {
-        val normCandidate = candidateTitle.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
-        val normPrimary = primaryTitle.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
+        val normCandidate = candidateTitle.lowercase(Locale.ROOT).replace(NON_ALPHANUMERIC, "")
+        val normPrimary = primaryTitle.lowercase(Locale.ROOT).replace(NON_ALPHANUMERIC, "")
         if (normPrimary.isBlank() || normCandidate.isBlank()) return false
         return normCandidate.contains(normPrimary) || normPrimary.contains(normCandidate)
     }
+
+    fun isStrongTrackMatch(
+        candidateTitle: String,
+        candidateArtist: String,
+        expectedTitle: String,
+        expectedArtist: String
+    ): Boolean {
+        val candidate = normalizeTrackTitle(cleanPrimaryTitle(candidateTitle, candidateArtist))
+        val expected = normalizeTrackTitle(cleanPrimaryTitle(expectedTitle, expectedArtist))
+        if (candidate.isBlank() || candidate != expected) return false
+
+        if (isGenericArtist(expectedArtist)) return true
+        if (isGenericArtist(candidateArtist)) return false
+
+        val candidateArtists = splitArtists(candidateArtist)
+        val expectedArtists = splitArtists(expectedArtist)
+        return candidateArtists.any { it in expectedArtists }
+    }
+
+    private fun normalizeTrackTitle(title: String): String =
+        title.lowercase(Locale.ROOT).replace(NON_ALPHANUMERIC, "")
+
+    private fun isGenericArtist(artist: String): Boolean {
+        val normalized = artist.lowercase(Locale.ROOT).trim()
+        return normalized.isBlank() || GENERIC_ARTISTS.any { normalized == it }
+    }
+
+    private fun splitArtists(artist: String): Set<String> =
+        artist.split(ARTIST_SEPARATOR)
+            .map(::normalizeTrackTitle)
+            .filter { it.isNotBlank() }
+            .toSet()
+
 }
