@@ -133,13 +133,13 @@ The universal and ABI-specific signed APKs are written to `app\build\outputs\apk
 .\gradlew.bat :app:bundleRelease
 ```
 
-The signed bundle is written to `app\build\outputs\bundle\release\app-release.aab`. These commands build locally; pushing a `v*` tag triggers the GitHub Actions workflow to publish a GitHub Release. Close the PowerShell session when finished to discard its temporary environment variables.
+The signed bundle is written to `app\build\outputs\bundle\release\app-release.aab`. To publish a release, tag a commit that is already merged into `main` with a version such as `v1.2.0`, then push the tag. The GitHub Actions workflow verifies that the tagged commit is on `main`, builds and verifies the signed APKs, and attaches them to a GitHub Release. Release assets remain available with the release rather than expiring as temporary Actions artifacts. Close the PowerShell session when finished to discard its temporary environment variables.
 
 ### 🤖 Automated GitHub CI & Version Metadata
 Muesic is configured with automatic Git metadata reflection:
-- **Automatic Tag Versioning**: When pushing a release tag (e.g., `v1.1.0`), the build pipeline automatically captures the version, commit date, and repository URL.
+- **Automatic Tag Versioning**: A pushed version tag (for example, `v1.2.0`) supplies the app version, commit date, and repository metadata for the release build.
 - **In-App About Reflection**: The in-app **About & Developer** section displays the clean version tag, latest commit date, and GitHub repository link.
-- **Tag-Only GitHub Actions Workflow**: `.github/workflows/build-and-release.yml` triggers **only** when a commit with a tag is pushed (e.g. `git push origin v1.1.0`). Untagged commits will not trigger a build, keeping CI usage clean and focused solely on official tagged releases.
+- **Merged-Commit Release Workflow**: `.github/workflows/build-and-release.yml` triggers on `v*` tags, but builds and publishes only when the tagged commit is reachable from `main`. It attaches the verified universal and ABI-specific APKs to a GitHub Release.
 
 ---
 
